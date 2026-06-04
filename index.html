@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>新能源投资测算 · 光储充柴一体化</title>
+  <link rel="stylesheet" href="css/styles.css" />
+</head>
+<body>
+  <header class="app-header">
+    <div class="brand">
+      <span class="logo">⚡</span>
+      <div>
+        <h1>新能源投资测算</h1>
+        <p class="subtitle">光伏 · 储能 · 充电桩 · 柴发 — 单选或任意组合 · AI 智能配置</p>
+      </div>
+    </div>
+    <div class="header-controls">
+      <label class="ctrl">
+        <span>地区</span>
+        <select id="regionSelect"></select>
+      </label>
+      <label class="ctrl">
+        <span>精度</span>
+        <select id="modeSelect">
+          <option value="simplified">简化快速版</option>
+          <option value="professional">专业逐时版(8760h)</option>
+        </select>
+      </label>
+    </div>
+  </header>
+
+  <nav class="tabs">
+    <button class="tab active" data-tab="calc">📊 方案测算</button>
+    <button class="tab" data-tab="optimize">🤖 AI 优化配置</button>
+    <button class="tab" data-tab="assistant">💬 AI 对话助手</button>
+  </nav>
+
+  <main>
+    <!-- ============ 方案测算 ============ -->
+    <section id="tab-calc" class="tab-panel active">
+      <div class="grid-2">
+        <div class="card">
+          <h2>1 · 选择设备组合</h2>
+          <p class="hint">勾选要纳入测算的设备，可单选可组合。</p>
+          <div class="device-toggles" id="deviceToggles"></div>
+        </div>
+
+        <div class="card">
+          <h2>2 · 用电负荷</h2>
+          <div class="field">
+            <label>年用电量 (kWh)</label>
+            <input type="number" id="annualKwh" value="3000000" />
+          </div>
+          <div class="field">
+            <label>峰值负荷 (kW)<small>留空则自动估算</small></label>
+            <input type="number" id="peakKw" placeholder="自动估算" />
+          </div>
+          <div class="field">
+            <label>负荷类型</label>
+            <select id="loadProfile"></select>
+          </div>
+          <div class="field-row">
+            <div class="field">
+              <label>折现率 (%)</label>
+              <input type="number" id="discountRate" value="6" step="0.5" />
+            </div>
+            <div class="field">
+              <label>测算年限 (年)</label>
+              <input type="number" id="projectYears" value="25" />
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="card" id="deviceParams">
+        <h2>3 · 设备参数 <small>（已填行业缺省值，可微调）</small></h2>
+        <div id="paramForms"></div>
+      </div>
+
+      <div class="actions">
+        <button class="btn-primary" id="runBtn">▶ 开始测算</button>
+        <button class="btn-ghost" id="resetBtn">重置参数</button>
+      </div>
+
+      <section id="results" class="results hidden">
+        <h2>测算结果</h2>
+        <div class="kpi-grid" id="kpiGrid"></div>
+        <div class="grid-2">
+          <div class="card">
+            <h3>累计现金流</h3>
+            <canvas id="cashflowChart" height="220"></canvas>
+          </div>
+          <div class="card">
+            <h3>投资构成</h3>
+            <canvas id="capexChart" height="220"></canvas>
+            <div id="capexLegend" class="legend"></div>
+          </div>
+        </div>
+        <div class="card">
+          <h3>逐年现金流明细</h3>
+          <div class="table-wrap"><table id="cashTable"></table></div>
+        </div>
+      </section>
+    </section>
+
+    <!-- ============ AI 优化 ============ -->
+    <section id="tab-optimize" class="tab-panel">
+      <div class="card">
+        <h2>🤖 AI 容量优化配置</h2>
+        <p class="hint">设定约束与目标，AI 自动搜索光伏 / 储能的最优容量组合（基于上方负荷与设备参数）。</p>
+        <div class="field-row">
+          <div class="field">
+            <label>投资预算上限 (万元)<small>留空不限</small></label>
+            <input type="number" id="optBudget" placeholder="不限" />
+          </div>
+          <div class="field">
+            <label>可用面积 (m²)<small>影响光伏上限</small></label>
+            <input type="number" id="optArea" placeholder="不限" />
+          </div>
+          <div class="field">
+            <label>优化目标</label>
+            <select id="optObjective">
+              <option value="maxNpv">净现值最大</option>
+              <option value="minPayback">回本最快</option>
+              <option value="maxIrr">收益率最高</option>
+            </select>
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" id="optRunBtn">⚙ 开始优化</button>
+          <button class="btn-ghost" id="dispatchBtn">比较储能调度策略</button>
+        </div>
+        <div class="progress hidden" id="optProgress"><div class="bar"></div></div>
+      </section>
+      <section id="optResults" class="card hidden">
+        <h3>优化结果</h3>
+        <div class="explain" id="optExplain"></div>
+        <div class="kpi-grid" id="optKpi"></div>
+        <button class="btn-secondary" id="applyOptBtn">↧ 应用此方案到测算表单</button>
+      </section>
+      <section id="dispatchResults" class="card hidden">
+        <h3>储能调度策略对比</h3>
+        <div class="table-wrap"><table id="dispatchTable"></table></div>
+      </section>
+    </section>
+
+    <!-- ============ AI 助手 ============ -->
+    <section id="tab-assistant" class="tab-panel">
+      <div class="card">
+        <h2>💬 AI 对话助手</h2>
+        <p class="hint">用大白话描述你的情况，AI 自动测算并推荐方案。</p>
+        <div class="examples">
+          <span>试试：</span>
+          <button class="chip" data-ex="华东三班倒工厂，月电费 30 万，厂房 8000 平，想配光伏加储能，越快回本越好">华东工厂光储</button>
+          <button class="chip" data-ex="广东商业楼宇，年用电 200 万度，峰值 600 千瓦，配光储充，预算 500 万">广东光储充</button>
+          <button class="chip" data-ex="户用别墅，月电费 2000 元，屋顶 100 平，装光伏和储能">户用光储</button>
+        </div>
+        <div class="chat" id="chatBox"></div>
+        <div class="chat-input">
+          <textarea id="chatInput" rows="2" placeholder="例如：华北园区，年用电 500 万度，三班倒，配光伏+储能+充电桩，预算 800 万…"></textarea>
+          <button class="btn-primary" id="chatSend">发送</button>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <footer class="app-footer">
+    <span>新能源投资测算 · 纯前端零依赖 · 测算结果仅供投资决策参考，请以实际工程方案为准</span>
+  </footer>
+
+  <!-- 模块按依赖顺序加载 -->
+  <script src="js/data.js"></script>
+  <script src="js/finance.js"></script>
+  <script src="js/engine.js"></script>
+  <script src="js/optimizer.js"></script>
+  <script src="js/forecast.js"></script>
+  <script src="js/assistant.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
