@@ -63,6 +63,8 @@ const App = {
     this.renderDeviceToggles();
     this.renderParamForms();
     this.bindEvents();
+    this.loadLlmConfig();
+    this.renderCompare();
   },
 
   fillRegions() {
@@ -157,7 +159,125 @@ const App = {
       document.getElementById('chatInput').value = c.dataset.ex;
       this.sendChat();
     }));
+
+    // 大模型设置
+    document.getElementById('llmSave').addEventListener('click', () => this.saveLlmConfig());
+
+    // 方案保存
+    document.getElementById('saveScenarioBtn').addEventListener('click', () => this.saveScenario());
+
+    // 方案对比表内的操作（载入/删除）
+    document.getElementById('compareTable').addEventListener('click', (e) => {
+      const btn = e.target.closest('button[data-act]');
+      if (!btn) return;
+      if (btn.dataset.act === 'del') this.deleteScenario(btn.dataset.id);
+      if (btn.dataset.act === 'load') this.loadScenario(btn.dataset.id);
+    });
   },
+
+  // ============ 大模型配置 ============
+  loadLlmConfig() {
+    let c = null;
+    try { c = JSON.parse(localStorage.getItem('nev_llm') || 'null'); } catch (e) {}
+    if (c) {
+      document.getElementById('llmBase').value = c.baseUrl || '';
+      document.getElementById('llmModel').value = c.model || '';
+      document.getElementById('llmKey').value = c.apiKey || '';
+      document.getElementById('llmSettings').open = true;
+    }
+  },
+  saveLlmConfig() {
+    const c = {
+      baseUrl: document.getElementById('llmBase').value.trim(),
+      model: document.getElementById('llmModel').value.trim(),
+      apiKey: document.getElementById('llmKey').value.trim()
+    };
+    if (!c.baseUrl || !c.apiKey) { localStorage.removeItem('nev_llm'); alert('已清除大模型设置，将使用内置规则引擎。'); return; }
+    localStorage.setItem('nev_llm', JSON.stringify(c));
+    alert('大模型设置已保存（仅存于本地浏览器）。');
+  },
+
+  // ============ 方案保存 / 对比 ============
+  scenarios() {
+    try { return JSON.parse(localStorage.getItem('nev_scenarios') || '[]'); } catch (e) { return []; }
+  },
+  saveScenario() {
+    const r = this.state.lastResult, cfg = this.state.lastCfg;
+    if (!r) { alert('请先测算'); return; }
+    const name = prompt('为该方案命名：', '方案 ' + (this.scenarios().length + 1));
+    if (name === null) return;
+    const devices = Object.entries(cfg.selected).filter(([, v]) => v)
+      .map(([k]) => this.DEVICES[k].name).join('+');
+    const f = r.finance;
+    const list = this.scenarios();
+    list.push({
+      id: String(Date.now()),
+      name: name || ('方案 ' + (list.length + 1)),
+      regionName: r.region.name,
+      currency: r.region.currency,
+      devices,
+      capex: r.capex, npv: f.npv, irr: f.irr,
+      payback: f.paybackStatic, lcoe: f.lcoe, avgAnnual: f.avgAnnual,
+      carbon: r.env.carbonCut,
+      cfg
+    });
+    localStorage.setItem('nev_scenarios', JSON.stringify(list));
+    this.renderCompare();
+    alert('已保存。可在"📁 方案对比"页查看。');
+  },
+  deleteScenario(id) {
+    const list = this.scenarios().filter(s => s.id !== id);
+    localStorage.setItem('nev_scenarios', JSON.stringify(list));
+    this.renderCompare();
+  },
+  loadScenario(id) {
+    const s = this.scenarios().find(x => x.id === id);
+    if (!s || !s.cfg) return;
+    const c = s.cfg;
+    document.getElementById('regionSelect').value = c.regionKey;
+    document.getElementById('modeSelect').value = c.mode || 'simplified';
+    document.getElementById('annualKwh').value = c.load.annualKwh;
+    document.getElementById('peakKw').value = c.load.peakKw || '';
+    document.getElementById('loadProfile').value = c.load.profile;
+    document.getElementById('discountRate').value = (c.discountRate * 100);
+    document.getElementById('projectYears').value = c.projectYears;
+    this.state.selected = { ...c.selected };
+    ['pv', 'storage', 'charger', 'diesel'].forEach(d => { if (c[d]) this.state.params[d] = { ...c[d] }; });
+    this.renderDeviceToggles();
+    this.renderParamForms();
+    document.querySelector('.tab[data-tab="calc"]').click();
+    this.run();
+  },
+  renderCompare() {
+    const list = this.scenarios();
+    const empty = document.getElementById('compareEmpty');
+    const table = document.getElementById('compareTable');
+    if (!list.length) { empty.classList.remove('hidden'); table.innerHTML = ''; return; }
+    empty.classList.add('hidden');
+    const cur = (s) => s.currency || '¥';
+    const rows = [
+      ['地区', s => s.regionName],
+      ['设备组合', s => s.devices],
+      ['总投资', s => this.money(s.capex, cur(s))],
+      ['净现值 NPV', s => this.money(s.npv, cur(s))],
+      ['内部收益率 IRR', s => s.irr !== null && s.irr !== undefined ? (s.irr * 100).toFixed(1) + '%' : '—'],
+      ['静态回本期', s => isFinite(s.payback) ? s.payback.toFixed(1) + ' 年' : '∞'],
+      ['平准度电成本', s => s.lcoe && isFinite(s.lcoe) ? s.lcoe.toFixed(3) : '—'],
+      ['年均净收益', s => this.money(s.avgAnnual, cur(s))],
+      ['碳减排(tCO₂)', s => Math.round(s.carbon).toLocaleString()]
+    ];
+    let html = '<thead><tr><th>指标</th>' +
+      list.map(s => `<th>${this._esc(s.name)} <button class="mini-x" data-act="del" data-id="${s.id}">✕</button></th>`).join('') +
+      '</tr></thead><tbody>';
+    rows.forEach(([label, fn]) => {
+      html += `<tr><td>${label}</td>` + list.map(s => `<td>${fn(s)}</td>`).join('') + '</tr>';
+    });
+    html += `<tr><td>操作</td>` +
+      list.map(s => `<td><button class="btn-ghost mini" data-act="load" data-id="${s.id}">载入测算</button></td>`).join('') +
+      '</tr></tbody>';
+    table.innerHTML = html;
+  },
+  _esc(s) { return String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])); },
 
   // ============ 配置组装（供测算/优化/助手共用） ============
   buildConfig(overrides = {}) {
@@ -197,6 +317,7 @@ const App = {
     if (!cfg.load.annualKwh) { alert('请填写年用电量'); return; }
     const result = Engine.run(cfg);
     this.state.lastResult = result;
+    this.state.lastCfg = cfg;
     this.renderResults(result);
     document.getElementById('results').classList.remove('hidden');
     document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
@@ -317,14 +438,22 @@ const App = {
   },
 
   // ============ 助手 ============
-  sendChat() {
+  async sendChat() {
     const input = document.getElementById('chatInput');
     const text = input.value.trim();
     if (!text) return;
     this.addMsg('user', text);
     input.value = '';
+    const thinking = this.addMsg('bot', '正在测算…');
     const fallback = this.buildConfig();
-    const res = Assistant.recommend(text, fallback);
+    let res;
+    try {
+      res = await Assistant.recommend(text, fallback);
+    } catch (e) {
+      thinking.textContent = '出错了：' + e.message;
+      return;
+    }
+    thinking.remove();
     const botMsg = this.addMsg('bot', res.reply);
     // 若有推荐方案，加"应用"按钮
     if (res.recommendation && res.recommendation.best) {

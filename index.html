@@ -34,6 +34,7 @@
     <button class="tab active" data-tab="calc">📊 方案测算</button>
     <button class="tab" data-tab="optimize">🤖 AI 优化配置</button>
     <button class="tab" data-tab="assistant">💬 AI 对话助手</button>
+    <button class="tab" data-tab="compare">📁 方案对比</button>
   </nav>
 
   <main>
@@ -84,7 +85,10 @@
       </div>
 
       <section id="results" class="results hidden">
-        <h2>测算结果</h2>
+        <div class="results-head">
+          <h2>测算结果</h2>
+          <button class="btn-secondary" id="saveScenarioBtn">💾 保存此方案</button>
+        </div>
         <div class="kpi-grid" id="kpiGrid"></div>
         <div class="grid-2">
           <div class="card">
@@ -150,6 +154,36 @@
       <div class="card">
         <h2>💬 AI 对话助手</h2>
         <p class="hint">用大白话描述你的情况，AI 自动测算并推荐方案。</p>
+
+        <details class="param-group" id="llmSettings">
+          <summary>⚙️ 接入大模型（可选 · 让对话更智能）</summary>
+          <div class="param-body">
+            <div class="field">
+              <label>API 地址 (Base URL) <small>OpenAI 兼容</small></label>
+              <input id="llmBase" placeholder="https://api.deepseek.com/v1" />
+            </div>
+            <div class="field">
+              <label>模型 <small>model</small></label>
+              <input id="llmModel" placeholder="deepseek-chat" />
+            </div>
+            <div class="field">
+              <label>API Key <small>仅存本地</small></label>
+              <input id="llmKey" type="password" placeholder="sk-..." />
+            </div>
+            <div class="field" style="align-self:end">
+              <button class="btn-secondary" id="llmSave">保存设置</button>
+            </div>
+          </div>
+          <div class="param-body">
+            <small style="grid-column:1/-1; color:var(--muted)">
+              密钥仅保存在你本地浏览器(localStorage)，不上传任何服务器。兼容 DeepSeek / Kimi / 通义 / OpenAI 等。
+              大模型只用于理解需求、抽取参数，测算数字仍由本地引擎计算。
+              若浏览器报跨域(CORS)错误，说明该 API 不允许浏览器直连，可改用支持 CORS 的服务商或自建代理。
+              未配置时使用内置规则引擎，离线可用。
+            </small>
+          </div>
+        </details>
+
         <div class="examples">
           <span>试试：</span>
           <button class="chip" data-ex="华东三班倒工厂，月电费 30 万，厂房 8000 平，想配光伏加储能，越快回本越好">华东工厂光储</button>
@@ -161,6 +195,17 @@
           <textarea id="chatInput" rows="2" placeholder="例如：华北园区，年用电 500 万度，三班倒，配光伏+储能+充电桩，预算 800 万…"></textarea>
           <button class="btn-primary" id="chatSend">发送</button>
         </div>
+      </div>
+    </section>
+
+    <!-- ============ 方案对比 ============ -->
+    <section id="tab-compare" class="tab-panel">
+      <div class="card">
+        <h2>📁 方案对比</h2>
+        <p class="hint">在"方案测算"页测算后点击"💾 保存此方案"，多个方案可在此并排比较关键指标。</p>
+        <div id="compareEmpty" class="hint">暂无已保存方案。</div>
+        <div class="table-wrap"><table id="compareTable"></table></div>
+        <div class="actions" id="compareActions"></div>
       </div>
     </section>
   </main>

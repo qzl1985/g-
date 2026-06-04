@@ -181,6 +181,17 @@ td.pos { color: var(--green); } td.neg { color: var(--red); }
   border-radius: 10px; padding: 10px 12px; font-size: 14px; resize: vertical; font-family: inherit;
 }
 
+/* ---------- results head & compare ---------- */
+.results-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
+.results-head h2 { margin: 0; }
+.btn-ghost.mini, .btn-secondary.mini { padding: 5px 12px; font-size: 12.5px; }
+.mini-x {
+  background: transparent; border: none; color: var(--muted); cursor: pointer;
+  font-size: 12px; padding: 0 2px; margin-left: 4px;
+}
+.mini-x:hover { color: var(--red); }
+#compareTable th, #compareTable td { text-align: left; }
+
 /* ---------- misc ---------- */
 .hidden { display: none !important; }
 .app-footer { text-align: center; font-size: 11.5px; color: var(--muted); padding: 18px; border-top: 1px solid var(--line); }

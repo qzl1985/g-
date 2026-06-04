@@ -55,13 +55,27 @@ const Assistant = {
   },
 
   /**
-   * 端到端：文本 → 推荐方案
+   * 端到端：文本 → 推荐方案（异步，以便可选调用大模型）
+   * 大模型只负责把自然语言解析为结构化参数；测算数字一律由本地引擎计算，
+   * 保证结果可解释、可复算。未配置大模型时自动回退到内置规则引擎。
    * @param {string} text 用户自然语言
    * @param {object} fallback 缺省值（当前界面配置），用于补全未提及参数
    * @returns { reply, parsed, recommendation }
    */
-  recommend(text, fallback) {
-    const parsed = this.parse(text);
+  async recommend(text, fallback) {
+    const ruleParsed = this.parse(text);
+    let parsed = ruleParsed;
+    let llmNote = '';
+    try {
+      const llm = await this.callLLM(text, fallback);
+      if (llm && llm.params) {
+        parsed = this._merge(ruleParsed, llm.params);
+        llmNote = '🤖 已由大模型解析需求。\n';
+      }
+    } catch (e) {
+      llmNote = `（大模型调用失败，已回退内置规则引擎：${e.message}）\n`;
+    }
+
     const regionKey = parsed.regionKey || fallback.regionKey || 'cn_ci_east';
     const profile = parsed.profile || fallback.load.profile || 'double_shift';
 
@@ -76,7 +90,7 @@ const Assistant = {
     if (!load.annualKwh) {
       return {
         parsed,
-        reply: '我需要一点用电信息才能测算：请告诉我大致的【月电费】或【年用电量】或【峰值负荷/变压器容量】其中之一。\n' +
+        reply: llmNote + '我需要一点用电信息才能测算：请告诉我大致的【月电费】或【年用电量】或【峰值负荷/变压器容量】其中之一。\n' +
                '例如："华东，三班倒工厂，月电费 30 万，厂房 8000 平，想配光伏加储能"。'
       };
     }
@@ -100,7 +114,7 @@ const Assistant = {
     // 生成回复
     const dvNames = Object.keys(parsed.devices).filter(k => parsed.devices[k])
       .map(k => ({ pv: '光伏', storage: '储能', charger: '充电桩', diesel: '柴油发电机' }[k])).join(' + ');
-    let reply = `已为你测算（${REGIONS[regionKey].name}，${LOAD_PROFILES[profile].name}）：\n`;
+    let reply = llmNote + `已为你测算（${REGIONS[regionKey].name}，${LOAD_PROFILES[profile].name}）：\n`;
     reply += `· 年用电量约 ${this._fmt(load.annualKwh)} kWh（${load.source}），峰值约 ${this._fmt(load.peakKw)} kW\n`;
     reply += `· 拟配置：${dvNames}\n\n`;
     reply += opt.explain;
@@ -109,12 +123,79 @@ const Assistant = {
     return { parsed, load, recommendation: opt, reply };
   },
 
+  /** 读取本地保存的大模型配置（仅存于浏览器 localStorage，不上传） */
+  llmConfig() {
+    try {
+      if (typeof localStorage === 'undefined') return null;
+      return JSON.parse(localStorage.getItem('nev_llm') || 'null');
+    } catch (e) { return null; }
+  },
+
   /**
-   * LLM 升级钩子（可选）。配置 API Key 后可替换 parse/recommend 的自然语言层。
-   * 默认未启用，返回 null，由规则引擎兜底。
+   * 可选大模型解析层（OpenAI 兼容 Chat Completions 接口）。
+   * 让大模型把自然语言抽取为结构化参数；返回 { params, note } 或 null。
+   * 兼容 DeepSeek / Kimi / 通义千问 / OpenAI 等；未配置则返回 null 由规则引擎兜底。
    */
-  async callLLM(/* text, context */) {
-    return null;
+  async callLLM(text /*, context */) {
+    const c = this.llmConfig();
+    if (!c || !c.apiKey || !c.baseUrl) return null;
+    if (typeof fetch === 'undefined') return null;
+
+    const sys =
+      '你是新能源投资测算助手。请从用户的中文描述中抽取结构化参数，只输出一个 JSON 对象，不要解释。\n' +
+      '字段（缺失则省略，不要编造）：\n' +
+      'devices: 数组，元素取值 "pv"(光伏)/"storage"(储能)/"charger"(充电桩)/"diesel"(柴油发电机)\n' +
+      'region: 取值 "cn_ci_east"(华东)/"cn_ci_north"(华北)/"cn_ci_south"(华南)/"cn_residential"(户用)/"overseas_eu"(海外)\n' +
+      'profile: 取值 "single_shift"/"double_shift"/"three_shift"/"commercial"/"residential"\n' +
+      'annualKwh: 年用电量(千瓦时, 数字)\n' +
+      'peakKw: 峰值负荷(千瓦, 数字)\n' +
+      'monthlyBill: 月电费(元, 数字)\n' +
+      'areaM2: 可用面积(平方米, 数字)\n' +
+      'budget: 投资预算(元, 数字)\n' +
+      'objective: 取值 "maxNpv"(净现值最大)/"minPayback"(回本最快)/"maxIrr"(收益率最高)\n' +
+      'note: 一句话中文说明你的理解(字符串)';
+
+    const resp = await fetch(c.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.apiKey },
+      body: JSON.stringify({
+        model: c.model || 'gpt-4o-mini',
+        temperature: 0,
+        messages: [{ role: 'system', content: sys }, { role: 'user', content: text }]
+      })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    let content = data.choices && data.choices[0] && data.choices[0].message
+      ? data.choices[0].message.content : '{}';
+    // 去除可能的 ```json 包裹
+    content = String(content).replace(/```json|```/g, '').trim();
+    const m = content.match(/\{[\s\S]*\}/);
+    const obj = JSON.parse(m ? m[0] : content);
+    return { params: this._fromLLM(obj), note: obj.note };
+  },
+
+  /** 把大模型返回的 JSON 规整为内部参数结构 */
+  _fromLLM(obj) {
+    const p = {};
+    if (Array.isArray(obj.devices) && obj.devices.length) {
+      p.devices = {};
+      obj.devices.forEach(d => { if (['pv', 'storage', 'charger', 'diesel'].includes(d)) p.devices[d] = true; });
+    }
+    if (obj.region && REGIONS[obj.region]) p.regionKey = obj.region;
+    if (obj.profile && LOAD_PROFILES[obj.profile]) p.profile = obj.profile;
+    ['annualKwh', 'peakKw', 'monthlyBill', 'areaM2', 'budget'].forEach(k => {
+      const v = Number(obj[k]); if (isFinite(v) && v > 0) p[k] = v;
+    });
+    if (['maxNpv', 'minPayback', 'maxIrr'].includes(obj.objective)) p.objective = obj.objective;
+    return p;
+  },
+
+  /** 合并规则解析与大模型解析（大模型提供的字段优先） */
+  _merge(rule, llm) {
+    const out = { ...rule, ...llm };
+    out.devices = (llm.devices && Object.keys(llm.devices).length) ? llm.devices : rule.devices;
+    return out;
   },
 
   // -------- 内部 --------
