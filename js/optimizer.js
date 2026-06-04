@@ -7,9 +7,68 @@
  *
  * 2) optimizeDispatch：评估不同储能调度策略（套利 / 套利+削峰 / 套利+平段充电），
  *    选出收益最高者。
+ *
+ * 3) sizeStorage：根据负荷曲线"反算"所需储能容量（谷充峰放、一充一放），
+ *    供"AI 自动反算储能容量"使用，结果可解释、可手动微调。
  */
 
 const Optimizer = {
+  /**
+   * 储能容量反算：依据代表日负荷曲线与分时时段，按"谷段充电、峰段放电、
+   * 一充一放"的工程逻辑推荐储能 kWh / kW。
+   * @param {object} cfg 完整配置
+   * @returns { capacityKwh, powerKw, ePeak, hPeak, hValley, explain }
+   */
+  sizeStorage(cfg) {
+    const region = REGIONS[cfg.regionKey];
+    const load = cfg.load || {};
+    const monthly = (load.monthly && load.monthly.length === 12) ? load.monthly : null;
+    const annualKwh = monthly ? monthly.reduce((a, b) => a + (+b || 0), 0) : (load.annualKwh || 0);
+    const st = cfg.storage || {};
+    const dod = st.dod || 0.95;
+    const eff = st.efficiency || 0.9;
+
+    const loadDay = Engine.buildLoadDay(annualKwh / 365, load, region);
+
+    // 按分时时段统计：峰段用电量、峰段时长、谷段时长
+    let ePeak = 0, hPeak = 0, hValley = 0;
+    for (let h = 0; h < 24; h++) {
+      const tier = region.tou.schedule[h] || 'flat';
+      if (tier === 'peak' || tier === 'sharp') { ePeak += loadDay[h]; hPeak++; }
+      if (tier === 'valley') hValley++;
+    }
+    if (hPeak === 0 || annualKwh <= 0) {
+      return { capacityKwh: 0, powerKw: 0, ePeak: 0, hPeak, hValley,
+        explain: '该地区无明显高峰时段或未填用电量，储能套利空间有限，暂不建议配置。' };
+    }
+
+    // 功率：先按覆盖峰段平均负荷
+    let powerKw = ePeak / hPeak;
+    // 谷段可充入电量（受功率与谷段时长限制）
+    const chargeable = hValley > 0 ? hValley * powerKw * Math.sqrt(eff) : powerKw * 2;
+    // 可用放电量 = min(峰段负荷, 谷段可充)
+    const eUse = Math.min(ePeak, chargeable);
+    powerKw = Math.max(powerKw * 0.6, eUse / hPeak);
+
+    // 额定容量（一充一放，计放电深度）
+    let capacityKwh = eUse / dod;
+
+    // 取整到合理工程规格
+    capacityKwh = Math.max(0, Math.round(capacityKwh / 50) * 50);
+    powerKw = Math.max(0, Math.round(powerKw / 25) * 25);
+    // 约束功率在 0.25C ~ 1C 之间
+    powerKw = Math.min(powerKw, capacityKwh);
+    powerKw = Math.max(powerKw, Math.round(capacityKwh * 0.25 / 25) * 25);
+    if (capacityKwh > 0 && powerKw === 0) powerKw = 25;
+
+    const hours = powerKw > 0 ? (capacityKwh / powerKw) : 0;
+    const explain =
+      `根据负荷曲线反算：高峰时段约 ${hPeak} 小时、峰段用电约 ${Math.round(ePeak).toLocaleString()} kWh，` +
+      `低谷可充约 ${hValley} 小时。\n按"谷充峰放、一充一放"测算，建议储能 ` +
+      `${capacityKwh.toLocaleString()} kWh / ${powerKw.toLocaleString()} kW（约 ${hours.toFixed(1)} 小时系统）。`;
+    return { capacityKwh, powerKw, ePeak, hPeak, hValley, explain };
+  },
+
   /**
    * @param {object} base 基础配置（同 Engine.run 的 cfg，含已选设备与默认参数）
    * @param {object} cons 约束 { budget, areaM2, maxPvKw, maxStorageKwh, objective }
@@ -21,7 +80,8 @@ const Optimizer = {
 
     // ---- 推导搜索上界 ----
     // 光伏上界：受场地面积、预算、以及"年发电不宜远超年用电"约束
-    const annualKwh = base.load.annualKwh;
+    const _monthly = (base.load.monthly && base.load.monthly.length === 12) ? base.load.monthly : null;
+    const annualKwh = _monthly ? _monthly.reduce((a, b) => a + (+b || 0), 0) : base.load.annualKwh;
     const pvByLoad = (annualKwh / region.pvYield) * 1.3;       // 发电≈1.3×用电封顶（避免过度上网）
     const pvByArea = cons.areaM2 ? cons.areaM2 / base.pv.areaPerKw : Infinity;
     let pvMax = Math.min(cons.maxPvKw || Infinity, pvByLoad, pvByArea);

@@ -31,7 +31,8 @@ const REGIONS = {
         'flat','valley'                                         // 22-23
       ]
     },
-    demandCharge: 42,        // 元/kW/月（按最大需量）
+    demandCharge: 42,        // 元/kW/月（基本电费·按最大需量）
+    capacityCharge: 30,      // 元/kVA/月（基本电费·按变压器容量）
     pvYield: 1150,           // kWh/kW/年（华东典型）
     feedInPrice: 0.42,       // 余电上网电价 元/kWh
     subsidy: 0.0,            // 度电补贴 元/kWh（地方，缺省 0）
@@ -55,6 +56,7 @@ const REGIONS = {
       ]
     },
     demandCharge: 40,
+    capacityCharge: 28,
     pvYield: 1300,
     feedInPrice: 0.40,
     subsidy: 0.0,
@@ -79,6 +81,7 @@ const REGIONS = {
       ]
     },
     demandCharge: 45,
+    capacityCharge: 32,
     pvYield: 1100,
     feedInPrice: 0.45,
     subsidy: 0.0,
@@ -99,6 +102,7 @@ const REGIONS = {
       ]
     },
     demandCharge: 0,         // 户用一般无需量电费
+    capacityCharge: 0,
     pvYield: 1150,
     feedInPrice: 0.42,
     subsidy: 0.0,
@@ -121,6 +125,7 @@ const REGIONS = {
       ]
     },
     demandCharge: 8,         // €/kW/月
+    capacityCharge: 5,       // €/kVA/月
     pvYield: 1050,
     feedInPrice: 0.10,
     subsidy: 0.0,

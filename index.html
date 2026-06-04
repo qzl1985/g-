@@ -64,19 +64,67 @@
         </div>
 
         <div class="card">
-          <h2>2 · 用电负荷</h2>
+          <h2>2 · 用电与电价</h2>
+
           <div class="field">
-            <label>年用电量 (kWh)</label>
-            <input type="number" id="annualKwh" value="3000000" />
+            <label>各月用电量 (kWh) <small>按月填，体现季节</small></label>
+            <div class="months" id="monthsGrid"></div>
+            <div class="inline-helper">
+              <input type="number" id="annualFill" placeholder="年总量(kWh)" />
+              <button class="btn-ghost mini" id="fillEven">均摊到 12 月</button>
+            </div>
           </div>
+
           <div class="field">
-            <label>峰值负荷 (kW)<small>留空则自动估算</small></label>
-            <input type="number" id="peakKw" placeholder="自动估算" />
+            <label>负荷数据精度</label>
+            <select id="dataTier">
+              <option value="template">行业典型曲线（最简）</option>
+              <option value="tou">分时段电量占比（较准）</option>
+              <option value="hourly">逐时负荷表（最准）</option>
+            </select>
           </div>
-          <div class="field">
+
+          <div class="field" id="profileField">
             <label>负荷类型</label>
             <select id="loadProfile"></select>
           </div>
+
+          <div id="touFields" class="hidden">
+            <label class="sublabel">峰 / 平 / 谷 / 尖 用电占比 (%)</label>
+            <div class="field-row4">
+              <div class="field"><label>尖峰</label><input type="number" id="touSharp" value="10" /></div>
+              <div class="field"><label>高峰</label><input type="number" id="touPeak" value="35" /></div>
+              <div class="field"><label>平段</label><input type="number" id="touFlat" value="35" /></div>
+              <div class="field"><label>低谷</label><input type="number" id="touValley" value="20" /></div>
+            </div>
+          </div>
+
+          <div id="hourlyFields" class="hidden">
+            <label class="sublabel">24 小时负荷（相对值，0~1）</label>
+            <div class="months hours24" id="hourlyGrid"></div>
+            <button class="btn-ghost mini" id="hourlyFromTpl">用典型曲线填充</button>
+          </div>
+
+          <div class="field-row">
+            <div class="field">
+              <label>变压器容量 (kVA)</label>
+              <input type="number" id="transformerKVA" value="1000" />
+            </div>
+            <div class="field">
+              <label>最大需量 (kW)<small>选填</small></label>
+              <input type="number" id="peakKw" placeholder="自动估算" />
+            </div>
+          </div>
+
+          <div class="field">
+            <label>基本电费方式<small>两部制</small></label>
+            <select id="basicFeeMode">
+              <option value="auto">自动取更省</option>
+              <option value="demand">按最大需量</option>
+              <option value="capacity">按变压器容量</option>
+            </select>
+          </div>
+
           <div class="field-row">
             <div class="field">
               <label>折现率 (%)</label>
@@ -90,8 +138,25 @@
         </div>
       </div>
 
+      <div class="card hidden" id="storageSizingCard">
+        <h2>3 · 储能容量确定 <small>（AI 按负荷反算，可微调）</small></h2>
+        <div class="field-row">
+          <div class="field">
+            <label>确定方式</label>
+            <select id="storageMode">
+              <option value="auto">AI 自动反算（推荐）</option>
+              <option value="manual">手动输入</option>
+            </select>
+          </div>
+          <div class="field" style="align-self:end">
+            <button class="btn-secondary" id="sizeStorageBtn">🔄 立即反算储能容量</button>
+          </div>
+        </div>
+        <div class="explain hidden" id="sizeExplain"></div>
+      </div>
+
       <div class="card" id="deviceParams">
-        <h2>3 · 设备参数 <small>（已填行业缺省值，可微调）</small></h2>
+        <h2>4 · 设备参数 <small>（已填行业缺省值，可微调）</small></h2>
         <div id="paramForms"></div>
       </div>
 

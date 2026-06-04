@@ -89,6 +89,20 @@ main { padding: 18px 22px 40px; max-width: 1180px; margin: 0 auto; }
 }
 .field input:focus, .field select:focus { outline: 2px solid var(--primary); border-color: var(--primary); }
 .field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.field-row4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.sublabel { font-size: 12px; color: var(--muted); display: block; margin: 4px 0 6px; }
+.months { display: grid; grid-template-columns: repeat(6, 1fr); gap: 6px; }
+.months.hours24 { grid-template-columns: repeat(8, 1fr); }
+.months .mcell { display: flex; flex-direction: column; gap: 2px; }
+.months .mcell span { font-size: 9.5px; color: var(--muted); text-align: center; }
+.months input { padding: 6px 4px; font-size: 12px; text-align: center; }
+.inline-helper { display: flex; gap: 8px; margin-top: 8px; }
+.inline-helper input { flex: 1; }
+@media (max-width: 620px) {
+  .field-row4 { grid-template-columns: repeat(2, 1fr); }
+  .months { grid-template-columns: repeat(4, 1fr); }
+  .months.hours24 { grid-template-columns: repeat(6, 1fr); }
+}
 
 /* ---------- Device toggles ---------- */
 .device-toggles { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }

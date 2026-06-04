@@ -7,8 +7,16 @@ const App = {
   state: {
     selected: { pv: true, storage: true, charger: false, diesel: false },
     params: JSON.parse(JSON.stringify(DEVICE_DEFAULTS)),
+    load: {
+      monthly: new Array(12).fill(250000),     // 各月用电量 kWh（默认年 300 万均摊）
+      dataTier: 'template',
+      hourly: LOAD_PROFILES.three_shift.shape.slice()  // 逐时负荷表默认值
+    },
+    storageMode: 'auto',                        // 储能容量：auto 自动反算 / manual 手动
     lastResult: null
   },
+
+  MONTH_NAMES: ['1月','2月','3月','4月','5月','6月','7月','8月','9月','10月','11月','12月'],
 
   // 设备元信息（图标 / 名称 / 说明）
   DEVICES: {
@@ -60,11 +68,48 @@ const App = {
   init() {
     this.fillRegions();
     this.fillLoadProfiles();
+    this.renderMonths();
+    this.renderHourly();
     this.renderDeviceToggles();
     this.renderParamForms();
+    this.updateLoadTierUI();
+    this.updateStorageSizingUI();
     this.bindEvents();
     this.loadLlmConfig();
     this.renderCompare();
+  },
+
+  // 渲染 12 个月用电量输入
+  renderMonths() {
+    const box = document.getElementById('monthsGrid');
+    box.innerHTML = this.state.load.monthly.map((v, i) => `
+      <div class="mcell">
+        <span>${this.MONTH_NAMES[i]}</span>
+        <input type="number" data-mon="${i}" value="${v}" />
+      </div>`).join('');
+  },
+
+  // 渲染 24 小时逐时负荷输入
+  renderHourly() {
+    const box = document.getElementById('hourlyGrid');
+    box.innerHTML = this.state.load.hourly.map((v, i) => `
+      <div class="mcell">
+        <span>${i}时</span>
+        <input type="number" step="0.05" data-hr="${i}" value="${(+v).toFixed(2)}" />
+      </div>`).join('');
+  },
+
+  // 根据负荷数据精度显示/隐藏对应输入区
+  updateLoadTierUI() {
+    const tier = document.getElementById('dataTier').value;
+    document.getElementById('profileField').classList.toggle('hidden', tier === 'hourly');
+    document.getElementById('touFields').classList.toggle('hidden', tier !== 'tou');
+    document.getElementById('hourlyFields').classList.toggle('hidden', tier !== 'hourly');
+  },
+
+  // 储能被选中时才显示"储能容量确定"卡片，并按模式启停反算
+  updateStorageSizingUI() {
+    document.getElementById('storageSizingCard').classList.toggle('hidden', !this.state.selected.storage);
   },
 
   fillRegions() {
@@ -133,8 +178,45 @@ const App = {
         this.state.selected[dev] = lbl.querySelector('input').checked;
         lbl.classList.toggle('on', this.state.selected[dev]);
         this.renderParamForms();
+        this.updateStorageSizingUI();
       }, 0);
     });
+
+    // 月度用电量输入
+    document.getElementById('monthsGrid').addEventListener('input', (e) => {
+      const i = e.target.dataset.mon;
+      if (i !== undefined) this.state.load.monthly[+i] = parseFloat(e.target.value) || 0;
+    });
+    // 逐时负荷输入
+    document.getElementById('hourlyGrid').addEventListener('input', (e) => {
+      const i = e.target.dataset.hr;
+      if (i !== undefined) this.state.load.hourly[+i] = parseFloat(e.target.value) || 0;
+    });
+    // 负荷数据精度切换
+    document.getElementById('dataTier').addEventListener('change', () => {
+      this.state.load.dataTier = document.getElementById('dataTier').value;
+      this.updateLoadTierUI();
+    });
+    // 年总量均摊到 12 月
+    document.getElementById('fillEven').addEventListener('click', () => {
+      const annual = parseFloat(document.getElementById('annualFill').value) || 0;
+      if (annual <= 0) { alert('请先在左侧输入年总用电量'); return; }
+      const per = Math.round(annual / 12);
+      this.state.load.monthly = new Array(12).fill(per);
+      this.renderMonths();
+    });
+    // 逐时负荷用典型曲线填充
+    document.getElementById('hourlyFromTpl').addEventListener('click', () => {
+      const prof = document.getElementById('loadProfile').value;
+      this.state.load.hourly = (LOAD_PROFILES[prof] || LOAD_PROFILES.three_shift).shape.slice();
+      this.renderHourly();
+    });
+    // 储能容量确定方式
+    document.getElementById('storageMode').addEventListener('change', () => {
+      this.state.storageMode = document.getElementById('storageMode').value;
+    });
+    // 立即反算储能容量
+    document.getElementById('sizeStorageBtn').addEventListener('click', () => this.doSizeStorage(true));
 
     // 参数输入
     document.getElementById('paramForms').addEventListener('input', (e) => {
@@ -238,17 +320,34 @@ const App = {
     const s = this.scenarios().find(x => x.id === id);
     if (!s || !s.cfg) return;
     const c = s.cfg;
-    document.getElementById('regionSelect').value = c.regionKey;
-    document.getElementById('modeSelect').value = c.mode || 'simplified';
-    document.getElementById('annualKwh').value = c.load.annualKwh;
-    document.getElementById('peakKw').value = c.load.peakKw || '';
-    document.getElementById('loadProfile').value = c.load.profile;
-    document.getElementById('discountRate').value = (c.discountRate * 100);
-    document.getElementById('projectYears').value = c.projectYears;
+    const g = id => document.getElementById(id);
+    g('regionSelect').value = c.regionKey;
+    g('modeSelect').value = c.mode || 'simplified';
+    const L = c.load || {};
+    if (L.monthly && L.monthly.length === 12) { this.state.load.monthly = L.monthly.slice(); this.renderMonths(); }
+    this.state.load.dataTier = L.dataTier || 'template';
+    g('dataTier').value = this.state.load.dataTier;
+    g('loadProfile').value = L.profile || 'three_shift';
+    if (L.tou) {
+      g('touSharp').value = Math.round((L.tou.sharp || 0) * 100);
+      g('touPeak').value = Math.round((L.tou.peak || 0) * 100);
+      g('touFlat').value = Math.round((L.tou.flat || 0) * 100);
+      g('touValley').value = Math.round((L.tou.valley || 0) * 100);
+    }
+    if (L.hourly && L.hourly.length === 24) { this.state.load.hourly = L.hourly.slice(); this.renderHourly(); }
+    g('transformerKVA').value = L.transformerKVA || 0;
+    g('peakKw').value = L.peakKw || '';
+    g('basicFeeMode').value = L.basicFeeMode || 'auto';
+    g('discountRate').value = (c.discountRate * 100);
+    g('projectYears').value = c.projectYears;
     this.state.selected = { ...c.selected };
     ['pv', 'storage', 'charger', 'diesel'].forEach(d => { if (c[d]) this.state.params[d] = { ...c[d] }; });
+    this.state.storageMode = 'manual';   // 载入已保存容量，按手动处理避免被反算覆盖
+    g('storageMode').value = 'manual';
     this.renderDeviceToggles();
     this.renderParamForms();
+    this.updateLoadTierUI();
+    this.updateStorageSizingUI();
     document.querySelector('.tab[data-tab="calc"]').click();
     this.run();
   },
@@ -447,19 +546,16 @@ const App = {
       storage: { ...this.state.params.storage },
       charger: { ...this.state.params.charger },
       diesel: { ...this.state.params.diesel },
-      load: o.load || {
-        annualKwh: parseFloat(document.getElementById('annualKwh').value) || 0,
-        peakKw: parseFloat(document.getElementById('peakKw').value) || 0,
-        profile: document.getElementById('loadProfile').value
-      },
+      load: o.load || this.readLoad(),
       discountRate: (o.discountRate != null) ? o.discountRate : (parseFloat(document.getElementById('discountRate').value) / 100 || 0.06),
       projectYears: o.projectYears || parseInt(document.getElementById('projectYears').value) || 25,
       strategy: o.strategy || ['arbitrage', 'demand'],
       dispatchMode: o.dispatchMode || 'arbitrage'
     };
-    // 自动补峰值
-    if (!cfg.load.peakKw && cfg.load.annualKwh) {
-      cfg.load.peakKw = Forecast.estimatePeakKw(cfg.load.annualKwh, cfg.load.profile);
+    // 自动补峰值（最大需量未填则按年用电量与负荷类型估算）
+    const ann = cfg.load.monthly ? cfg.load.monthly.reduce((a, b) => a + (+b || 0), 0) : (cfg.load.annualKwh || 0);
+    if (!cfg.load.peakKw && ann) {
+      cfg.load.peakKw = Forecast.estimatePeakKw(ann, cfg.load.profile || 'double_shift');
     }
     // 应用 overrides 中的设备容量
     if (o.pv) Object.assign(cfg.pv, o.pv);
@@ -467,12 +563,53 @@ const App = {
     return cfg;
   },
 
+  // 从界面读取完整负荷与电价配置
+  readLoad() {
+    const g = id => document.getElementById(id);
+    return {
+      monthly: this.state.load.monthly.slice(),
+      dataTier: g('dataTier').value,
+      profile: g('loadProfile').value,
+      tou: {
+        sharp: (parseFloat(g('touSharp').value) || 0) / 100,
+        peak: (parseFloat(g('touPeak').value) || 0) / 100,
+        flat: (parseFloat(g('touFlat').value) || 0) / 100,
+        valley: (parseFloat(g('touValley').value) || 0) / 100
+      },
+      hourly: this.state.load.hourly.slice(),
+      transformerKVA: parseFloat(g('transformerKVA').value) || 0,
+      peakKw: parseFloat(g('peakKw').value) || 0,
+      basicFeeMode: g('basicFeeMode').value
+    };
+  },
+
+  // 储能容量反算（auto=true 时强制提示，run 内静默调用）
+  doSizeStorage(announce) {
+    if (!this.state.selected.storage) { if (announce) alert('请先勾选储能设备'); return null; }
+    const cfg = this.buildConfig({ mode: 'simplified' });
+    const sz = Optimizer.sizeStorage(cfg);
+    if (sz.capacityKwh > 0) {
+      this.state.params.storage.capacityKwh = sz.capacityKwh;
+      this.state.params.storage.powerKw = sz.powerKw;
+      this.renderParamForms();
+    }
+    const box = document.getElementById('sizeExplain');
+    box.textContent = sz.explain;
+    box.classList.remove('hidden');
+    return sz;
+  },
+
   // ============ 测算 ============
   run() {
     try {
+      // 若储能且为"自动反算"模式，先按当前负荷反算储能容量
+      if (this.state.selected.storage && this.state.storageMode === 'auto') {
+        this.doSizeStorage(false);
+      }
       const cfg = this.buildConfig();
       if (!Object.values(cfg.selected).some(Boolean)) { alert('请至少选择一种设备'); return; }
-      if (!cfg.load.annualKwh) { alert('请填写年用电量'); return; }
+      const ann = cfg.load.monthly ? cfg.load.monthly.reduce((a, b) => a + (+b || 0), 0) : (cfg.load.annualKwh || 0);
+      if (!ann) { alert('请填写各月用电量（可用"均摊到 12 月"快速填写）'); return; }
       const result = Engine.run(cfg);
       this.state.lastResult = result;
       this.state.lastCfg = cfg;
@@ -510,6 +647,24 @@ const App = {
         <div class="value">${k.value}<span class="unit">${k.unit || ''}</span></div>
       </div>`).join('');
 
+    // 负荷与两部制基本电费说明
+    if (r.load) {
+      const L = r.load, basisName = { demand: '按最大需量', capacity: '按变压器容量' };
+      const basicSaving = (L.baselineBasicFee || 0) - (L.withBasicFee || 0);
+      let note = `年用电量约 ${(L.annualKwh / 1e4).toFixed(0)} 万 kWh，最大需量约 ${Math.round(L.peakKw)} kW`;
+      if (L.transformerKVA) note += `，变压器 ${Math.round(L.transformerKVA)} kVA`;
+      note += `。\n基本电费（两部制）：基准 ${basisName[L.baselineBasis] || L.baselineBasis} ${this.money(L.baselineBasicFee, cur)}/年`;
+      if (basicSaving > 1) note += `，储能削峰 ${Math.round(L.demandCut)} kW 后降至 ${this.money(L.withBasicFee, cur)}/年，年省 ${this.money(basicSaving, cur)}`;
+      note += '。';
+      let el = document.getElementById('loadNote');
+      if (!el) {
+        el = document.createElement('div');
+        el.id = 'loadNote'; el.className = 'explain';
+        document.getElementById('kpiGrid').insertAdjacentElement('afterend', el);
+      }
+      el.textContent = note;
+    }
+
     this.drawCashflow(r);
     this.drawCapex(r);
     this.renderCashTable(r);
@@ -532,7 +687,8 @@ const App = {
   // ============ 优化 ============
   runOptimize() {
     const base = this.buildConfig({ mode: 'simplified' });
-    if (!base.load.annualKwh) { alert('请先在"方案测算"页填写年用电量'); return; }
+    const ann = base.load.monthly ? base.load.monthly.reduce((a, b) => a + (+b || 0), 0) : (base.load.annualKwh || 0);
+    if (!ann) { alert('请先在"方案测算"页填写各月用电量'); return; }
     const cons = {
       budget: this.val('optBudget') ? this.val('optBudget') * 1e4 : null,
       areaM2: this.val('optArea') || null,
@@ -628,11 +784,14 @@ const App = {
         // 同步地区/负荷到表单
         document.getElementById('regionSelect').value = res.parsed.regionKey || fallback.regionKey;
         if (res.load) {
-          document.getElementById('annualKwh').value = Math.round(res.load.annualKwh);
-          document.getElementById('peakKw').value = Math.round(res.load.peakKw);
+          const per = Math.round((res.load.annualKwh || 0) / 12);
+          this.state.load.monthly = new Array(12).fill(per);
+          this.renderMonths();
+          document.getElementById('peakKw').value = Math.round(res.load.peakKw || 0);
           document.getElementById('loadProfile').value = res.load.profile;
         }
         Object.assign(this.state.selected, res.parsed.devices);
+        this.updateStorageSizingUI();
         this.applyOpt();
       };
       botMsg.appendChild(btn);

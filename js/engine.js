@@ -19,15 +19,63 @@ const Engine = {
   },
 
   /**
-   * 构造代表日负荷曲线（24h, kWh/h）
-   * @param annualKwh 年用电量
-   * @param profileKey 负荷类型
+   * 构造代表日负荷曲线（24h, kWh/h），支持三档数据精度：
+   *   - template：行业典型曲线 × 当日电量
+   *   - tou：按用户给的 峰/平/谷(/尖) 电量占比分配到对应时段（套利测算更准）
+   *   - hourly：用户给的 24 小时归一化负荷表 × 当日电量
+   * @param dailyKwh 当日总用电量
+   * @param load 负荷配置对象 {profile, dataTier, tou:{sharp,peak,flat,valley}, hourly:[24]}
+   * @param region 用于读取分时时段归属
    */
-  buildLoadDay(annualKwh, profileKey) {
-    const shape = (LOAD_PROFILES[profileKey] || LOAD_PROFILES.double_shift).shape;
-    const dailyTotal = annualKwh / 365;
+  buildLoadDay(dailyKwh, load, region) {
+    const tier = (load && load.dataTier) || 'template';
+
+    // 档3：逐时负荷表
+    if (tier === 'hourly' && load.hourly && load.hourly.length === 24) {
+      const sum = load.hourly.reduce((a, b) => a + (+b || 0), 0) || 1;
+      return load.hourly.map(s => ((+s || 0) / sum) * dailyKwh);
+    }
+
+    // 档2：分时段电量占比
+    if (tier === 'tou' && load.tou && region) {
+      const sched = region.tou.schedule;
+      const cnt = { sharp: 0, peak: 0, flat: 0, valley: 0 };
+      sched.forEach(t => { if (cnt[t] !== undefined) cnt[t]++; });
+      const shares = {
+        sharp: +load.tou.sharp || 0, peak: +load.tou.peak || 0,
+        flat: +load.tou.flat || 0, valley: +load.tou.valley || 0
+      };
+      // 该地区无尖峰时段时，把尖峰占比并入高峰；任何无对应时段的占比并入平段
+      if (cnt.sharp === 0) { shares.peak += shares.sharp; shares.sharp = 0; }
+      ['peak', 'valley'].forEach(k => { if (cnt[k] === 0) { shares.flat += shares[k]; shares[k] = 0; } });
+      let stot = shares.sharp + shares.peak + shares.flat + shares.valley;
+      if (stot <= 0) stot = 1;
+      return sched.map(t => {
+        const c = cnt[t] || 1;
+        return ((shares[t] || 0) / stot) * dailyKwh / c;
+      });
+    }
+
+    // 档1：行业典型曲线
+    const shape = (LOAD_PROFILES[(load && load.profile)] || LOAD_PROFILES.double_shift).shape;
     const sumShape = shape.reduce((a, b) => a + b, 0);
-    return shape.map(s => (s / sumShape) * dailyTotal);
+    return shape.map(s => (s / sumShape) * dailyKwh);
+  },
+
+  /**
+   * 两部制·基本电费（年）
+   *   - demand：按最大需量  demandCharge(元/kW/月) × 需量(kW) × 12
+   *   - capacity：按变压器容量 capacityCharge(元/kVA/月) × 容量(kVA) × 12
+   *   - auto：取两者更省
+   */
+  basicFee(maxDemandKw, transformerKVA, region, mode) {
+    const demandFee = (region.demandCharge || 0) * maxDemandKw * 12;
+    const capFee = (region.capacityCharge || 0) * (transformerKVA || 0) * 12;
+    if (mode === 'capacity') return { fee: capFee, basis: 'capacity' };
+    if (mode === 'demand') return { fee: demandFee, basis: 'demand' };
+    // auto：变压器容量电费为 0（未填）时只能按需量
+    if (capFee <= 0) return { fee: demandFee, basis: 'demand' };
+    return demandFee <= capFee ? { fee: demandFee, basis: 'demand' } : { fee: capFee, basis: 'capacity' };
   },
 
   /**
@@ -232,11 +280,45 @@ const Engine = {
       capex += c; capexBreakdown.diesel = c;
     }
 
-    // ---------- 负荷曲线 ----------
-    const loadDay = this.buildLoadDay(cfg.load.annualKwh, cfg.load.profile);
-    const baseDay = this.baselineDay(loadDay, region);
-    const baselineAnnualCost = baseDay.cost * 365 +
-      (region.demandCharge * (cfg.load.peakKw || baseDay.peak) * 12);
+    // ---------- 负荷与电价输入 ----------
+    const load = cfg.load || {};
+    const monthly = (load.monthly && load.monthly.length === 12) ? load.monthly.map(x => +x || 0) : null;
+    const annualKwh = monthly ? monthly.reduce((a, b) => a + b, 0) : (load.annualKwh || 0);
+    const transformerKVA = load.transformerKVA || 0;
+    const basicFeeMode = load.basicFeeMode || 'auto';
+
+    // 代表日负荷（用于峰值估算）
+    const repLoadDay = this.buildLoadDay(annualKwh / 365, load, region);
+    const peakKw = load.peakKw || Math.round(Math.max.apply(null, repLoadDay) * 1.3) || 1;
+
+    // 月度迭代器：专业版 12 个月分别建负荷/光伏；简化版 1 个代表日×365
+    const months = [];
+    if (mode === 'professional') {
+      for (let m = 0; m < 12; m++) {
+        const dc = this._daysInMonth(m);
+        const dailyKwh = monthly ? (monthly[m] / dc) : (annualKwh / 365);
+        months.push({ m, dayCount: dc, dailyKwh, monthFactor: MONTHLY_IRRADIANCE[m] });
+      }
+    } else {
+      months.push({ m: -1, dayCount: 365, dailyKwh: annualKwh / 365, monthFactor: 1 });
+    }
+
+    // ---------- 基准能耗成本（无任何投资·纯电网） ----------
+    let baselineEnergyCost = 0;
+    months.forEach(mo => {
+      const ld = this.buildLoadDay(mo.dailyKwh, load, region);
+      let dayCost = 0;
+      for (let h = 0; h < 24; h++) dayCost += ld[h] * this.priceAt(region, h).price;
+      baselineEnergyCost += dayCost * mo.dayCount;
+    });
+    const baselineBasic = this.basicFee(peakKw, transformerKVA, region, basicFeeMode);
+    const baselineAnnualCost = baselineEnergyCost + baselineBasic.fee;
+
+    // ---------- 储能削峰后的最大需量与基本电费 ----------
+    const demandMgmt = sel.storage && cfg.strategy && cfg.strategy.indexOf('demand') >= 0;
+    const storageDemandCut = demandMgmt ? Math.min(cfg.storage.powerKw || 0, peakKw * 0.4) : 0;
+    const withMaxDemand = Math.max(0, peakKw - storageDemandCut);
+    const withBasic = this.basicFee(withMaxDemand, transformerKVA, region, basicFeeMode);
 
     // ---------- 逐年模拟 ----------
     const annualNet = [];
@@ -244,7 +326,7 @@ const Engine = {
     const energyByYear = [];
     let totalPvGen = 0, totalCarbonCut = 0, totalStoreThroughput = 0;
 
-    // 充电桩、柴发年值（首年，后续按通胀/衰减简单处理，这里保持稳定）
+    // 充电桩、柴发年值（首年，后续保持稳定）
     const chg = sel.charger ? this.chargerYear(cfg.charger, region) : null;
     const dsl = sel.diesel ? this.dieselYear(cfg.diesel, region) : null;
 
@@ -255,46 +337,35 @@ const Engine = {
         pvFactor = (y === 0) ? (1 - cfg.pv.degradationY1)
                              : (1 - cfg.pv.degradationY1) * Math.pow(1 - cfg.pv.degradation, y);
       }
-      // 储能容量衰减（影响可用量）
+      // 储能容量衰减
       let storeForYear = null;
       if (sel.storage) {
         const cap = cfg.storage.capacityKwh * Math.pow(1 - cfg.storage.degradation, y);
-        storeForYear = { ...cfg.storage, capacityKwh: cap };
+        storeForYear = Object.assign({}, cfg.storage, { capacityKwh: cap });
       }
 
-      let yearGridCost = 0, yearExport = 0, yearPvSelf = 0, yearPvExport = 0;
-      let yearPeak = 0, yearThroughput = 0;
+      let yearGridCost = 0, yearExport = 0, yearPvSelf = 0, yearPvExport = 0, yearThroughput = 0;
 
-      const daysIter = mode === 'professional' ? 12 : 1; // 专业版按 12 个月分别算
-      for (let m = 0; m < daysIter; m++) {
-        const monthFactor = mode === 'professional' ? MONTHLY_IRRADIANCE[m] : 1;
-        const dayCount = mode === 'professional' ? this._daysInMonth(m) : 365;
-
-        const pvDay = sel.pv ? this.buildPvDay(cfg.pv.capacityKw, region, pvFactor, monthFactor)
+      months.forEach(mo => {
+        const loadDay = this.buildLoadDay(mo.dailyKwh, load, region);
+        const pvDay = sel.pv ? this.buildPvDay(cfg.pv.capacityKw, region, pvFactor, mo.monthFactor)
                              : new Array(24).fill(0);
-
-        // 削峰目标：若启用需量管理，设为基准峰值的 75%
-        const demandCap = (sel.storage && cfg.strategy && cfg.strategy.includes('demand'))
-          ? (cfg.load.peakKw || baseDay.peak) * 0.75 : null;
-
+        const demandCap = demandMgmt ? (peakKw * 0.75) : null;
         const d = this.dispatchDay({
           loadDay, pvDay, region,
           storage: storeForYear,
           strategy: cfg.dispatchMode || 'arbitrage',
           demandCap
         });
+        yearGridCost += d.cost * mo.dayCount;
+        yearExport += d.exportRevenue * mo.dayCount;
+        yearPvSelf += d.pvSelfUse * mo.dayCount;
+        yearPvExport += d.pvExport * mo.dayCount;
+        yearThroughput += d.storeThroughput * mo.dayCount;
+      });
 
-        yearGridCost += d.cost * dayCount;
-        yearExport += d.exportRevenue * dayCount;
-        yearPvSelf += d.pvSelfUse * dayCount;
-        yearPvExport += d.pvExport * dayCount;
-        yearThroughput += d.storeThroughput * dayCount;
-        yearPeak = Math.max(yearPeak, d.peakImport);
-      }
-
-      // 需量电费（按削峰后峰值）
-      const demandCost = region.demandCharge * yearPeak * 12;
-      const energyCostWithSystem = yearGridCost + demandCost;
+      // 与系统下的总电费 = 电度电费 + 削峰后基本电费
+      const energyCostWithSystem = yearGridCost + withBasic.fee;
 
       // 运维
       let om = 0;
@@ -345,7 +416,16 @@ const Engine = {
         pvGenTotal: totalPvGen,
         storeThroughput: totalStoreThroughput
       },
-      detail: { charger: chg, diesel: dsl, loadDay, peakKw: cfg.load.peakKw || baseDay.peak }
+      load: {
+        annualKwh, peakKw, transformerKVA,
+        basicFeeMode,
+        baselineBasis: baselineBasic.basis,   // 基准基本电费计费依据
+        withBasis: withBasic.basis,
+        baselineBasicFee: baselineBasic.fee,
+        withBasicFee: withBasic.fee,
+        demandCut: storageDemandCut
+      },
+      detail: { charger: chg, diesel: dsl, loadDay: repLoadDay, peakKw }
     };
   },
 

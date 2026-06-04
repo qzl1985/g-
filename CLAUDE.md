@@ -32,14 +32,24 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   `DEVICE_DEFAULTS`, `LOAD_PROFILES`, `PV_PROFILE_BASE`, `MONTHLY_IRRADIANCE`.
   **Every region's `tou.schedule` MUST have exactly 24 entries** (one per hour);
   a short array silently produced NaN before a guard was added in `engine.priceAt`.
+  Two-part tariff: regions carry both `demandCharge` (元/kW/月, by max demand)
+  and `capacityCharge` (元/kVA/月, by transformer capacity).
 - `js/finance.js` — `Finance`: NPV, IRR (bisection), static/dynamic payback,
   LCOE, `summarize()`.
 - `js/engine.js` — `Engine`: device modeling + hourly storage dispatch
   (`dispatchDay`) + `run(cfg)`. Dual precision via `mode`:
   `simplified` (1 representative day ×365) vs `professional` (12 months ×
-  monthly irradiance). Returns capex breakdown, per-year cashflow, finance, env.
+  monthly irradiance). `cfg.load` carries `monthly[12]` (kWh per month),
+  `dataTier` (`template`/`tou`/`hourly` — see `buildLoadDay`), `transformerKVA`,
+  `peakKw`, `basicFeeMode` (`auto`/`demand`/`capacity`). `basicFee()` computes
+  two-part basic charge; storage demand-shaving only reduces it under demand
+  basis. Returns capex breakdown, per-year cashflow, finance, env, and a `load`
+  summary (annualKwh, peakKw, basic-fee basis/amounts, demandCut).
 - `js/optimizer.js` — `Optimizer`: `optimizeCapacity` (grid search + local
-  refine) and `optimizeDispatch` (compares 3 storage strategies).
+  refine), `optimizeDispatch` (compares 3 storage strategies), and
+  `sizeStorage(cfg)` — back-calculates recommended storage kWh/kW from the load
+  curve (valley-charge / peak-discharge, one cycle/day). Used by the UI's
+  "AI auto-size storage" mode.
 - `js/forecast.js` — `Forecast`: reverse-estimate annual kWh / peak from
   bill or peak; predict PV generation.
 - `js/assistant.js` — `Assistant`: Chinese NL parse (`parse`) + end-to-end
