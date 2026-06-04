@@ -166,6 +166,10 @@ const App = {
     // 方案保存
     document.getElementById('saveScenarioBtn').addEventListener('click', () => this.saveScenario());
 
+    // 报告导出
+    document.getElementById('exportCsvBtn').addEventListener('click', () => this.exportCSV());
+    document.getElementById('exportPdfBtn').addEventListener('click', () => this.exportPDF());
+
     // 方案对比表内的操作（载入/删除）
     document.getElementById('compareTable').addEventListener('click', (e) => {
       const btn = e.target.closest('button[data-act]');
@@ -278,6 +282,159 @@ const App = {
     table.innerHTML = html;
   },
   _esc(s) { return String(s).replace(/[<>&]/g, c => ({ '<': '&lt;', '>': '&gt;', '&': '&amp;' }[c])); },
+
+  // ============ 报告导出 ============
+  /** 汇总设备配置明细，供 CSV / PDF 共用 */
+  _deviceLines(cfg, r) {
+    const lines = [];
+    if (cfg.selected.pv) lines.push(['光伏', `装机 ${Math.round(cfg.pv.capacityKw)} kW · ${cfg.pv.capexPerW} 元/W`, r.capexBreakdown.pv]);
+    if (cfg.selected.storage) lines.push(['储能', `${Math.round(cfg.storage.capacityKwh)} kWh / ${Math.round(cfg.storage.powerKw)} kW · ${cfg.storage.capexPerWh} 元/Wh`, r.capexBreakdown.storage]);
+    if (cfg.selected.charger) lines.push(['充电桩', `${cfg.charger.count} 台 × ${cfg.charger.powerKw} kW`, r.capexBreakdown.charger]);
+    if (cfg.selected.diesel) lines.push(['柴油发电机', `${Math.round(cfg.diesel.capacityKw)} kW · ${cfg.diesel.capexPerW} 元/W`, r.capexBreakdown.diesel]);
+    return lines;
+  },
+
+  /** 关键指标键值对（带格式化） */
+  _kpiPairs(r) {
+    const f = r.finance, cur = r.region.currency;
+    return [
+      ['总投资', this.money(r.capex, cur)],
+      ['净现值 NPV', this.money(f.npv, cur)],
+      ['内部收益率 IRR', f.irr !== null ? (f.irr * 100).toFixed(1) + '%' : '—'],
+      ['静态回本期', isFinite(f.paybackStatic) ? f.paybackStatic.toFixed(1) + ' 年' : '不可回本'],
+      ['动态回本期', isFinite(f.paybackDynamic) ? f.paybackDynamic.toFixed(1) + ' 年' : '不可回本'],
+      ['平准度电成本 LCOE', f.lcoe && isFinite(f.lcoe) ? f.lcoe.toFixed(3) + ' ' + cur + '/kWh' : '—'],
+      ['年均净收益', this.money(f.avgAnnual, cur)],
+      ['全周期净收益', this.money(f.totalNet, cur)],
+      ['全周期碳减排', Math.round(r.env.carbonCut).toLocaleString() + ' tCO₂']
+    ];
+  },
+
+  exportCSV() {
+    const r = this.state.lastResult, cfg = this.state.lastCfg;
+    if (!r) { alert('请先测算'); return; }
+    const cur = r.region.currency, f = r.finance;
+    const rows = [];
+    rows.push(['新能源投资测算报告']);
+    rows.push(['生成时间', new Date().toLocaleString('zh-CN')]);
+    rows.push(['地区', r.region.name]);
+    rows.push(['测算精度', r.mode === 'professional' ? '专业逐时版(8760h)' : '简化快速版']);
+    rows.push(['测算年限', r.years + ' 年']);
+    rows.push(['年用电量(kWh)', Math.round(cfg.load.annualKwh)]);
+    rows.push(['峰值负荷(kW)', Math.round(cfg.load.peakKw)]);
+    rows.push([]);
+    rows.push(['【设备配置】', '规格', '投资(' + cur + ')']);
+    this._deviceLines(cfg, r).forEach(l => rows.push([l[0], l[1], Math.round(l[2])]));
+    rows.push([]);
+    rows.push(['【关键指标】']);
+    this._kpiPairs(r).forEach(p => rows.push([p[0], p[1]]));
+    rows.push([]);
+    rows.push(['【逐年现金流】']);
+    rows.push(['年度', '当年现金流(' + cur + ')', '累计现金流(' + cur + ')']);
+    f.cashflows.forEach((cf, t) => rows.push([
+      t === 0 ? '初始投资' : '第' + t + '年', Math.round(cf), Math.round(f.cumulative[t])
+    ]));
+
+    const csv = rows.map(row => row.map(c => {
+      const s = String(c == null ? '' : c);
+      return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+    }).join(',')).join('\n');
+    const BOM = String.fromCharCode(0xFEFF);   // 让 Excel 正确识别 UTF-8 中文
+    this._download(BOM + csv, '新能源投资测算_' + this._stamp() + '.csv', 'text/csv;charset=utf-8');
+  },
+
+  exportPDF() {
+    const r = this.state.lastResult, cfg = this.state.lastCfg;
+    if (!r) { alert('请先测算'); return; }
+    let cashImg = '', capexImg = '';
+    try { cashImg = document.getElementById('cashflowChart').toDataURL('image/png'); } catch (e) {}
+    try { capexImg = document.getElementById('capexChart').toDataURL('image/png'); } catch (e) {}
+    const html = this._reportHTML(r, cfg, cashImg, capexImg);
+    const w = window.open('', '_blank');
+    if (!w) { alert('请允许弹出窗口以生成 PDF 报告。'); return; }
+    w.document.open(); w.document.write(html); w.document.close();
+    // 等待图片与字体加载后唤起打印
+    const fire = () => { try { w.focus(); w.print(); } catch (e) {} };
+    w.onload = fire;
+    setTimeout(fire, 600);
+  },
+
+  _reportHTML(r, cfg, cashImg, capexImg) {
+    const f = r.finance, cur = r.region.currency;
+    const dev = this._deviceLines(cfg, r).map(l =>
+      `<tr><td>${l[0]}</td><td>${l[1]}</td><td class="num">${this.money(l[2], cur)}</td></tr>`).join('');
+    const kpi = this._kpiPairs(r).map(p =>
+      `<div class="kbox"><div class="kl">${p[0]}</div><div class="kv">${p[1]}</div></div>`).join('');
+    const cash = f.cashflows.map((cf, t) =>
+      `<tr><td>${t === 0 ? '初始投资' : '第 ' + t + ' 年'}</td>
+       <td class="num ${cf >= 0 ? 'pos' : 'neg'}">${this.money(cf, cur)}</td>
+       <td class="num ${f.cumulative[t] >= 0 ? 'pos' : 'neg'}">${this.money(f.cumulative[t], cur)}</td></tr>`).join('');
+    const mode = r.mode === 'professional' ? '专业逐时版 (8760h)' : '简化快速版';
+    return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/>
+<title>新能源投资测算报告</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: "PingFang SC","Microsoft YaHei",sans-serif; color:#1a2233; margin:32px; }
+  h1 { font-size:22px; margin:0 0 4px; }
+  h2 { font-size:15px; margin:24px 0 10px; padding-bottom:6px; border-bottom:2px solid #2563eb; color:#1d4ed8; }
+  .meta { color:#5b6478; font-size:12.5px; margin-bottom:6px; }
+  .meta b { color:#1a2233; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th,td { padding:7px 10px; border-bottom:1px solid #e2e6ee; text-align:left; }
+  th { background:#f3f6fc; color:#5b6478; }
+  td.num { text-align:right; font-variant-numeric:tabular-nums; }
+  td.pos { color:#0a8f3c; } td.neg { color:#d12f2f; }
+  .kgrid { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; }
+  .kbox { border:1px solid #e2e6ee; border-radius:8px; padding:10px 12px; }
+  .kbox .kl { font-size:11.5px; color:#5b6478; }
+  .kbox .kv { font-size:17px; font-weight:700; margin-top:3px; }
+  .charts { display:flex; gap:16px; flex-wrap:wrap; margin-top:8px; }
+  .charts figure { flex:1; min-width:240px; margin:0; }
+  .charts img { width:100%; border:1px solid #e2e6ee; border-radius:8px; background:#0f1729; }
+  .charts figcaption { font-size:12px; color:#5b6478; margin-top:4px; text-align:center; }
+  .disc { margin-top:24px; font-size:11px; color:#8a92a6; border-top:1px solid #e2e6ee; padding-top:10px; }
+  @media print { body { margin:14mm; } h2 { page-break-after:avoid; } tr { page-break-inside:avoid; } }
+</style></head><body>
+  <h1>⚡ 新能源投资测算报告</h1>
+  <div class="meta">生成时间：<b>${new Date().toLocaleString('zh-CN')}</b></div>
+  <div class="meta">地区：<b>${r.region.name}</b> ｜ 测算精度：<b>${mode}</b> ｜ 测算年限：<b>${r.years} 年</b></div>
+  <div class="meta">年用电量：<b>${Math.round(cfg.load.annualKwh).toLocaleString()} kWh</b> ｜ 峰值负荷：<b>${Math.round(cfg.load.peakKw).toLocaleString()} kW</b></div>
+
+  <h2>一、设备配置</h2>
+  <table><thead><tr><th>设备</th><th>规格</th><th class="num">投资</th></tr></thead>
+  <tbody>${dev}<tr><td><b>合计</b></td><td></td><td class="num"><b>${this.money(r.capex, cur)}</b></td></tr></tbody></table>
+
+  <h2>二、关键财务指标</h2>
+  <div class="kgrid">${kpi}</div>
+
+  <h2>三、图表</h2>
+  <div class="charts">
+    ${cashImg ? `<figure><img src="${cashImg}"/><figcaption>累计现金流</figcaption></figure>` : ''}
+    ${capexImg ? `<figure><img src="${capexImg}"/><figcaption>投资构成</figcaption></figure>` : ''}
+  </div>
+
+  <h2>四、逐年现金流</h2>
+  <table><thead><tr><th>年度</th><th class="num">当年现金流</th><th class="num">累计现金流</th></tr></thead>
+  <tbody>${cash}</tbody></table>
+
+  <div class="disc">本报告基于工程估算与公开市场参数自动生成，仅供投资决策初筛参考；
+  实际收益受当地电价政策、设备选型、施工与运营等因素影响，请以最终工程方案为准。</div>
+</body></html>`;
+  },
+
+  _stamp() {
+    const d = new Date(), p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}_${p(d.getHours())}${p(d.getMinutes())}`;
+  },
+  _download(content, filename, mime) {
+    const blob = new Blob([content], { type: mime });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = filename;
+    document.body.appendChild(a); a.click();
+    document.body.removeChild(a);
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  },
 
   // ============ 配置组装（供测算/优化/助手共用） ============
   buildConfig(overrides = {}) {

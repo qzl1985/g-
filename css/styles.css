@@ -184,6 +184,7 @@ td.pos { color: var(--green); } td.neg { color: var(--red); }
 /* ---------- results head & compare ---------- */
 .results-head { display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 8px; }
 .results-head h2 { margin: 0; }
+.result-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .btn-ghost.mini, .btn-secondary.mini { padding: 5px 12px; font-size: 12.5px; }
 .mini-x {
   background: transparent; border: none; color: var(--muted); cursor: pointer;
