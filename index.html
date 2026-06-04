@@ -5,6 +5,22 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>新能源投资测算 · 光储充柴一体化</title>
   <link rel="stylesheet" href="css/styles.css" />
+  <script>
+    // 全局错误横幅：任何脚本加载/运行错误都会显示在页面顶部，便于排查
+    window.addEventListener('error', function (e) {
+      try {
+        var b = document.getElementById('errbanner');
+        if (!b) {
+          b = document.createElement('div');
+          b.id = 'errbanner';
+          b.style.cssText = 'position:fixed;left:0;right:0;top:0;z-index:99999;background:#b91c1c;color:#fff;font:13px/1.6 sans-serif;padding:10px 14px;white-space:pre-wrap;';
+          (document.body || document.documentElement).appendChild(b);
+        }
+        var msg = (e && (e.message || (e.error && e.error.message))) || '未知错误';
+        b.textContent = '⚠ 脚本出错：' + msg + (e.filename ? '\n' + e.filename + ' : ' + e.lineno : '');
+      } catch (_) {}
+    });
+  </script>
 </head>
 <body>
   <header class="app-header">

@@ -14,7 +14,7 @@ const Engine = {
   /** 取某小时电价（兜底：时段表缺失则按平段处理，避免 NaN） */
   priceAt(region, hour) {
     const tier = region.tou.schedule[hour] || 'flat';
-    const price = region.tou[tier] ?? region.tou.flat;
+    const price = (region.tou[tier] != null) ? region.tou[tier] : region.tou.flat;
     return { tier, price };
   },
 
@@ -210,7 +210,7 @@ const Engine = {
     const sel = cfg.selected;            // {pv:bool, storage:bool, charger:bool, diesel:bool}
     const mode = cfg.mode || 'simplified';
     const years = cfg.projectYears || 25;
-    const discountRate = cfg.discountRate ?? 0.06;
+    const discountRate = (cfg.discountRate != null) ? cfg.discountRate : 0.06;
 
     // ---------- 容量与造价 ----------
     let capex = 0;

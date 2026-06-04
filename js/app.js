@@ -452,7 +452,7 @@ const App = {
         peakKw: parseFloat(document.getElementById('peakKw').value) || 0,
         profile: document.getElementById('loadProfile').value
       },
-      discountRate: o.discountRate ?? (parseFloat(document.getElementById('discountRate').value) / 100 || 0.06),
+      discountRate: (o.discountRate != null) ? o.discountRate : (parseFloat(document.getElementById('discountRate').value) / 100 || 0.06),
       projectYears: o.projectYears || parseInt(document.getElementById('projectYears').value) || 25,
       strategy: o.strategy || ['arbitrage', 'demand'],
       dispatchMode: o.dispatchMode || 'arbitrage'
@@ -469,15 +469,21 @@ const App = {
 
   // ============ 测算 ============
   run() {
-    const cfg = this.buildConfig();
-    if (!Object.values(cfg.selected).some(Boolean)) { alert('请至少选择一种设备'); return; }
-    if (!cfg.load.annualKwh) { alert('请填写年用电量'); return; }
-    const result = Engine.run(cfg);
-    this.state.lastResult = result;
-    this.state.lastCfg = cfg;
-    this.renderResults(result);
-    document.getElementById('results').classList.remove('hidden');
-    document.getElementById('results').scrollIntoView({ behavior: 'smooth' });
+    try {
+      const cfg = this.buildConfig();
+      if (!Object.values(cfg.selected).some(Boolean)) { alert('请至少选择一种设备'); return; }
+      if (!cfg.load.annualKwh) { alert('请填写年用电量'); return; }
+      const result = Engine.run(cfg);
+      this.state.lastResult = result;
+      this.state.lastCfg = cfg;
+      // 先显示结果区，保证 canvas 有实际宽度后再绘图（否则图表为空白）
+      document.getElementById('results').classList.remove('hidden');
+      this.renderResults(result);
+      document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
+    } catch (e) {
+      console.error(e);
+      alert('测算出错：' + (e && e.message ? e.message : e));
+    }
   },
 
   renderResults(r) {
