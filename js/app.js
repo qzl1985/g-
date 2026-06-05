@@ -218,6 +218,12 @@ const App = {
     // 立即反算储能容量
     document.getElementById('sizeStorageBtn').addEventListener('click', () => this.doSizeStorage(true));
 
+    // 负荷表导入
+    document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
+    document.getElementById('parseLoadBtn').addEventListener('click', () => this.parseLoadTable());
+    document.getElementById('applyLoadBtn').addEventListener('click', () => this.applyLoadTable());
+    document.getElementById('loadSample').addEventListener('click', () => this.showLoadSample());
+
     // 参数输入
     document.getElementById('paramForms').addEventListener('input', (e) => {
       const i = e.target;
@@ -597,6 +603,76 @@ const App = {
     box.textContent = sz.explain;
     box.classList.remove('hidden');
     return sz;
+  },
+
+  // ============ 负荷表导入（15 分钟数据，CSV / 粘贴） ============
+  onLoadFile(e) {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = () => {
+      document.getElementById('loadPaste').value = String(reader.result || '').slice(0, 4000000);
+      this.parseLoadTable();
+    };
+    reader.onerror = () => alert('文件读取失败，请改用粘贴方式。');
+    reader.readAsText(file, 'utf-8');
+  },
+
+  parseLoadTable() {
+    const text = document.getElementById('loadPaste').value.trim();
+    const note = document.getElementById('importNote');
+    const preview = document.getElementById('importPreview');
+    const applyRow = document.getElementById('importApplyRow');
+    if (!text) { alert('请先选择 CSV 文件或粘贴负荷数据'); return; }
+    const kind = document.getElementById('valueKindSel').value || undefined;
+    let res;
+    try { res = LoadParser.parse(text, { valueKind: kind }); }
+    catch (err) { res = { ok: false, error: err.message }; }
+
+    if (!res.ok) {
+      note.textContent = '识别失败：' + res.error;
+      note.classList.remove('hidden');
+      preview.classList.add('hidden'); applyRow.classList.add('hidden');
+      return;
+    }
+    this._parsedLoad = res;
+    note.textContent = res.note;
+    note.classList.remove('hidden');
+
+    const mx = Math.max.apply(null, res.hourly) || 1;
+    const bars = res.hourly.map((v, i) =>
+      `<div class="hbar" title="${i}时 ${Math.round(v)}kW" style="height:${Math.round(v / mx * 70) + 3}px"></div>`).join('');
+    preview.innerHTML = '<div class="sublabel">逐时平均负荷（24h）</div>' +
+      '<div class="hbars">' + bars + '</div>' +
+      '<div class="hbars-cap"><span>0时</span><span>12时</span><span>23时</span></div>';
+    preview.classList.remove('hidden');
+    applyRow.classList.remove('hidden');
+  },
+
+  applyLoadTable() {
+    const res = this._parsedLoad;
+    if (!res) return;
+    this.state.load.monthly = res.monthly.map(v => Math.round(v));
+    const mx = Math.max.apply(null, res.hourly) || 1;
+    this.state.load.hourly = res.hourly.map(v => +(v / mx).toFixed(3));   // 归一到 0~1
+    this.state.load.dataTier = 'hourly';
+    document.getElementById('dataTier').value = 'hourly';
+    document.getElementById('peakKw').value = res.peakKw;
+    this.renderMonths();
+    this.renderHourly();
+    this.updateLoadTierUI();
+    alert('已填入测算：年用电 ' + (res.annualKwh / 1e4).toFixed(1) + ' 万kWh、各月电量、' +
+          '最大需量 ' + res.peakKw + ' kW、逐时负荷曲线。\n现在可直接点"开始测算"。');
+  },
+
+  showLoadSample() {
+    document.getElementById('loadPaste').value =
+      '数据时间,有功功率(kW)\n' +
+      '2024-01-01 00:15,320.5\n2024-01-01 00:30,318.2\n2024-01-01 00:45,305.0\n' +
+      '2024-01-01 01:00,300.1\n2024-01-01 01:15,298.7';
+    document.getElementById('importNote').textContent =
+      '示例：第一列时间（含日期更准，可识别各月；仅时间则按典型日推算），第二列数值（有功功率 kW 或每 15 分钟电量 kWh）。支持逗号/制表符/分号/空格分隔，有无表头均可。';
+    document.getElementById('importNote').classList.remove('hidden');
   },
 
   // ============ 测算 ============

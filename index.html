@@ -138,6 +138,29 @@
         </div>
       </div>
 
+      <div class="card" id="importCard">
+        <h2>📥 导入用电负荷表 <small>（15 分钟数据 · CSV / 粘贴 · 自动识别）</small></h2>
+        <p class="hint">上传电力公司导出的负荷表（CSV/TXT），或直接粘贴数据。系统自动识别时间列、数值列与采样间隔，算出<b>真实最大需量、各月电量、逐时负荷曲线</b>并一键填入。</p>
+        <div class="import-row">
+          <input type="file" id="loadFile" accept=".csv,.txt,text/csv,text/plain" />
+          <button class="btn-ghost mini" id="loadSample">看示例格式</button>
+        </div>
+        <textarea id="loadPaste" rows="4" placeholder="或在此粘贴（每行一条，时间 + 数值）：&#10;2024-01-01 00:15, 320.5&#10;2024-01-01 00:30, 318.2&#10;2024-01-01 00:45, 305.0 …"></textarea>
+        <div class="import-row">
+          <button class="btn-secondary" id="parseLoadBtn">🔍 识别并预览</button>
+          <select id="valueKindSel">
+            <option value="">数值类型：自动判断</option>
+            <option value="power">有功功率 kW</option>
+            <option value="energy">每区间电量 kWh</option>
+          </select>
+        </div>
+        <div class="explain hidden" id="importNote"></div>
+        <div class="hidden" id="importPreview"></div>
+        <div class="actions hidden" id="importApplyRow">
+          <button class="btn-primary" id="applyLoadBtn">↧ 填入测算（年/月电量 · 最大需量 · 逐时曲线）</button>
+        </div>
+      </div>
+
       <div class="card hidden" id="storageSizingCard">
         <h2>3 · 储能容量确定 <small>（AI 按负荷反算，可微调）</small></h2>
         <div class="field-row">
@@ -305,6 +328,7 @@
   <script src="js/engine.js"></script>
   <script src="js/optimizer.js"></script>
   <script src="js/forecast.js"></script>
+  <script src="js/loadparser.js"></script>
   <script src="js/assistant.js"></script>
   <script src="js/app.js"></script>
 </body>

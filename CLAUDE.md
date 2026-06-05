@@ -52,6 +52,11 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   "AI auto-size storage" mode.
 - `js/forecast.js` — `Forecast`: reverse-estimate annual kWh / peak from
   bill or peak; predict PV generation.
+- `js/loadparser.js` — `LoadParser.parse(text, {valueKind?, intervalMin?})`:
+  zero-dep parser for utility 15-min (or 5/10/30/60-min) load tables (CSV or
+  pasted). Auto-detects delimiter, header, timestamp/value columns, interval,
+  and kW-vs-kWh. Returns annualKwh, monthly[12], real peak demand (kW),
+  and a 24h average load shape — fed into the form (dataTier `hourly`).
 - `js/assistant.js` — `Assistant`: Chinese NL parse (`parse`) + end-to-end
   `recommend`. Depends on global `App.buildConfig`. `callLLM` is an optional
   hook for swapping in a real LLM.
