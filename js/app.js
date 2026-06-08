@@ -13,6 +13,7 @@ const App = {
       hourly: LOAD_PROFILES.three_shift.shape.slice()  // 逐时负荷表默认值
     },
     storageMode: 'auto',                        // 储能容量：auto 自动反算 / manual 手动
+    bills: [],                                  // 已识别的电费单（计费真值）
     lastResult: null
   },
 
@@ -237,6 +238,14 @@ const App = {
     document.getElementById('engEnable').addEventListener('change', () => {
       document.getElementById('engParams').classList.toggle('hidden', !this.engineeringOn());
     });
+
+    // 电费单校准
+    document.getElementById('billFile').addEventListener('change', (e) => this.onBillFile(e));
+    document.getElementById('billParseBtn').addEventListener('click', () => this.parseBillPaste());
+    document.getElementById('billAddBtn').addEventListener('click', () => this.addBillFromForm());
+    document.getElementById('billApplyBtn').addEventListener('click', () => this.applyBillCalibration());
+    document.getElementById('billClearBtn').addEventListener('click', () => { this.state.bills = []; this.renderBillList(); document.getElementById('billNote').classList.add('hidden'); });
+    document.getElementById('billSample').addEventListener('click', () => this.showBillSample());
 
     // 负荷表导入
     document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
@@ -626,6 +635,153 @@ const App = {
     return sz;
   },
 
+  // ============ 电费单校准（PDF/图片/文本/录入 · 计费真值） ============
+  async onBillFile(e) {
+    const files = Array.from((e.target && e.target.files) || []);
+    if (!files.length) return;
+    const note = document.getElementById('billExtractNote');
+    note.textContent = '正在识别 ' + files.length + ' 张电费单…';
+    let added = 0;
+    for (const f of files) {
+      try {
+        let fields = null;
+        if (/\.pdf$/i.test(f.name)) {
+          const ab = await f.arrayBuffer();
+          const r = await PdfReader.extractText(ab);
+          if (r.text && r.text.replace(/\s/g, '').length > 10) {
+            fields = await this._extractBill(r.text);
+          } else {
+            note.textContent = 'PDF 无文字层（疑似扫描件/图片），请改用图片上传走视觉识别，或手工录入。';
+            continue;
+          }
+        } else if (/^image\//.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name)) {
+          const dataUrl = await this._fileToDataUrl(f);
+          const obj = await Assistant.extractBillImage(dataUrl);
+          if (!obj) { note.textContent = '图片识别需在「AI 助手」里配置带视觉的大模型；也可手工录入。'; continue; }
+          fields = obj;
+        } else { // 文本文件
+          const text = await f.text();
+          fields = await this._extractBill(text);
+        }
+        if (fields) { this.state.bills.push(BillParser.fromFields(fields)); added++; }
+      } catch (err) { note.textContent = '识别出错：' + (err.message || err); }
+    }
+    if (added) { note.textContent = `已识别并添加 ${added} 张电费单`; this.renderBillList(); }
+  },
+
+  async parseBillPaste() {
+    const text = document.getElementById('billPaste').value.trim();
+    if (!text) { alert('请先粘贴电费单文字，或上传文件'); return; }
+    const note = document.getElementById('billExtractNote');
+    note.textContent = '识别中…';
+    const fields = await this._extractBill(text);
+    this.fillBillForm(BillParser.fromFields(fields));
+    document.getElementById('billFormWrap').open = true;
+    note.textContent = '已填入下方表单，请核对后「添加这张单」。';
+  },
+
+  // 文本抽取：优先大模型，失败回退规则
+  async _extractBill(text) {
+    try {
+      const obj = await Assistant.extractBillText(text);
+      if (obj && Object.keys(obj).length) return obj;
+    } catch (e) { /* 回退规则 */ }
+    const b = BillParser.parseText(text);
+    return { month: b.month, sharp: b.energy.sharp, peak: b.energy.peak, flat: b.energy.flat,
+      valley: b.energy.valley, total: b.energy.total, maxDemand: b.maxDemand,
+      transformerKVA: b.transformerKVA, basicFee: b.basicFee, energyFee: b.energyFee,
+      totalFee: b.totalFee, powerFactor: b.powerFactor };
+  },
+
+  _fileToDataUrl(file) {
+    return new Promise((res, rej) => {
+      const r = new FileReader();
+      r.onload = () => res(r.result); r.onerror = () => rej(new Error('读取失败'));
+      r.readAsDataURL(file);
+    });
+  },
+
+  fillBillForm(bill) {
+    const set = (id, v) => { document.getElementById(id).value = (v != null ? v : ''); };
+    set('bf_month', bill.month); set('bf_sharp', bill.energy.sharp); set('bf_peak', bill.energy.peak);
+    set('bf_flat', bill.energy.flat); set('bf_valley', bill.energy.valley); set('bf_total', bill.energy.total);
+    set('bf_maxDemand', bill.maxDemand); set('bf_transformerKVA', bill.transformerKVA);
+    set('bf_basicFee', bill.basicFee); set('bf_totalFee', bill.totalFee);
+  },
+
+  addBillFromForm() {
+    const g = id => document.getElementById(id).value;
+    const bill = BillParser.fromFields({
+      month: g('bf_month'), sharp: g('bf_sharp'), peak: g('bf_peak'), flat: g('bf_flat'),
+      valley: g('bf_valley'), total: g('bf_total'), maxDemand: g('bf_maxDemand'),
+      transformerKVA: g('bf_transformerKVA'), basicFee: g('bf_basicFee'), totalFee: g('bf_totalFee')
+    });
+    if (!bill.energy.total && !bill.maxDemand) { alert('请至少填写总电量或最大需量'); return; }
+    this.state.bills.push(bill);
+    this.renderBillList();
+    ['bf_month','bf_sharp','bf_peak','bf_flat','bf_valley','bf_total','bf_maxDemand','bf_transformerKVA','bf_basicFee','bf_totalFee']
+      .forEach(id => { document.getElementById(id).value = ''; });
+  },
+
+  renderBillList() {
+    const box = document.getElementById('billList');
+    box.innerHTML = this.state.bills.map((b, i) => `
+      <div class="bill-item">
+        <span>${b.month ? b.month + '月' : '单张'} ｜ 电量 ${b.energy.total ? Math.round(b.energy.total).toLocaleString() : '—'} kWh ｜ 需量 ${b.maxDemand ? Math.round(b.maxDemand) + 'kW' : '—'} ｜ 电费 ${b.totalFee ? this.money(b.totalFee, '¥') : '—'}</span>
+        <span class="x" data-bi="${i}">✕</span>
+      </div>`).join('');
+    box.querySelectorAll('.x').forEach(x => x.addEventListener('click', () => {
+      this.state.bills.splice(+x.dataset.bi, 1); this.renderBillList();
+    }));
+  },
+
+  applyBillCalibration() {
+    // 表单里若有未添加的内容，先纳入
+    const g = id => document.getElementById(id).value;
+    if (g('bf_total') || g('bf_maxDemand')) this.addBillFromForm();
+    if (!this.state.bills.length) { alert('请先识别或录入至少一张电费单'); return; }
+
+    const loadCtx = {
+      monthly: this.state.load.monthly.slice(),
+      dataTier: this.state.load.dataTier,
+      peakKw: parseFloat(document.getElementById('peakKw').value) || 0,
+      transformerKVA: parseFloat(document.getElementById('transformerKVA').value) || 0,
+      basicFeeMode: document.getElementById('basicFeeMode').value,
+      measuredPeakKw: this.state.load.measuredPeakKw,     // 来自负荷表导入
+      measuredAnnual: this.state.load.measuredAnnual
+    };
+    const r = BillParser.calibrate(this.state.bills, loadCtx);
+    const cal = r.calibrated;
+    if (cal) {
+      this.state.load.monthly = cal.monthly.map(v => Math.round(v));
+      this.renderMonths();
+      if (cal.tou) {
+        this.state.load.dataTier = 'tou';
+        document.getElementById('dataTier').value = 'tou';
+        document.getElementById('touSharp').value = Math.round(cal.tou.sharp * 100);
+        document.getElementById('touPeak').value = Math.round(cal.tou.peak * 100);
+        document.getElementById('touFlat').value = Math.round(cal.tou.flat * 100);
+        document.getElementById('touValley').value = Math.round(cal.tou.valley * 100);
+        this.updateLoadTierUI();
+      }
+      if (cal.peakKw) document.getElementById('peakKw').value = Math.round(cal.peakKw);
+      if (cal.transformerKVA) document.getElementById('transformerKVA').value = Math.round(cal.transformerKVA);
+      if (cal.basicFeeMode) document.getElementById('basicFeeMode').value = cal.basicFeeMode;
+    }
+    const noteEl = document.getElementById('billNote');
+    noteEl.textContent = '电费单校准（计费真值）：\n· ' + r.notes.join('\n· ');
+    noteEl.classList.remove('hidden');
+    this.run();
+  },
+
+  showBillSample() {
+    document.getElementById('billPaste').value =
+      '计费月份：2024年7月\n受电容量：2000 kVA  最大需量：860 kW  功率因数：0.95\n' +
+      '尖峰电量：60000 度  高峰电量：180000 度  平段电量：150000 度  低谷电量：120000 度\n' +
+      '总用电量：510000 度\n基本电费：34400 元  电度电费：358000 元  电费合计：392400 元';
+    document.getElementById('billExtractNote').textContent = '已填入示例文字，点"识别电费单"试试。';
+  },
+
   // ============ 负荷表导入（Excel/CSV · 多文件 · 15 分钟数据） ============
   async onLoadFile(e) {
     const files = Array.from((e.target && e.target.files) || []);
@@ -710,6 +866,8 @@ const App = {
     const mx = Math.max.apply(null, res.hourly) || 1;
     this.state.load.hourly = res.hourly.map(v => +(v / mx).toFixed(3));   // 归一到 0~1
     this.state.load.dataTier = 'hourly';
+    this.state.load.measuredPeakKw = res.peakKw;        // 供电费单交叉校验
+    this.state.load.measuredAnnual = res.annualKwh;
     document.getElementById('dataTier').value = 'hourly';
     document.getElementById('peakKw').value = res.peakKw;
     this.renderMonths();

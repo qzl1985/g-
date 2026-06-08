@@ -73,6 +73,15 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   monthly[12], real peak demand (kW), and a 24h average load shape — fed into
   the form (dataTier `hourly`). Multiple files are concatenated into one
   `parseRows` call (aggregated by date).
+- `js/billparser.js` — `BillParser`: Chinese 电费单 parsing (`parseText` regex,
+  `fromFields` for LLM/manual input) + `calibrate(bills, load)` — **bill is the
+  billing ground truth**: sets monthly kWh, TOU shares (dataTier `tou`), max
+  demand, transformer kVA, basic-fee basis from bills; cross-checks against the
+  load table's measured peak/annual and warns on >15%/10% discrepancy.
+- `js/pdfreader.js` — `PdfReader.extractText(arrayBuffer)` → `Promise<{text,via}>`:
+  lazy-loads pdf.js from CDN for reliable (incl. Chinese) text PDFs, falls back
+  to a zero-dep extractor (inflate FlateDecode via DecompressionStream + Tj/TJ
+  ops). Scanned/image PDFs have no text layer → UI routes to LLM vision / manual.
 - `js/xlsx.js` — `XlsxReader.read(arrayBuffer)` → `Promise<string[][]>`:
   zero-dep .xlsx reader. Parses the ZIP central directory, inflates entries via
   the built-in `DecompressionStream('deflate-raw')`, and regex-parses the first

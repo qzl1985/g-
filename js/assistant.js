@@ -175,6 +175,53 @@ const Assistant = {
     return { params: this._fromLLM(obj), note: obj.note };
   },
 
+  /**
+   * 用大模型从电费单【文本】抽取结构化字段（OpenAI 兼容）。返回扁平字段或 null。
+   */
+  async extractBillText(text) {
+    const c = this.llmConfig();
+    if (!c || !c.apiKey || !c.baseUrl || typeof fetch === 'undefined') return null;
+    const sys = '你是电费单识别助手。从用户给的中文电费单文本中抽取字段，只输出 JSON：' +
+      '{month(月份1-12), sharp(尖峰电量kWh), peak(高峰电量), flat(平段电量), valley(低谷电量), ' +
+      'total(总电量), maxDemand(最大需量kW), transformerKVA(受电/变压器容量kVA), ' +
+      'basicFee(基本电费元), energyFee(电度电费元), totalFee(电费合计元), powerFactor(功率因数)}。缺失项省略，不要编造。';
+    return await this._chatJSON(c, [
+      { role: 'system', content: sys }, { role: 'user', content: text }
+    ]);
+  },
+
+  /**
+   * 用大模型【视觉】识别电费单图片（拍照/截图）。imageDataUrl 为 data:image/...;base64,...
+   */
+  async extractBillImage(imageDataUrl) {
+    const c = this.llmConfig();
+    if (!c || !c.apiKey || !c.baseUrl || typeof fetch === 'undefined') return null;
+    const prompt = '识别这张电费单，只输出 JSON：{month,sharp,peak,flat,valley,total,maxDemand,' +
+      'transformerKVA,basicFee,energyFee,totalFee,powerFactor}（电量kWh/需量kW/容量kVA/费用元）。缺失项省略。';
+    return await this._chatJSON(c, [{
+      role: 'user',
+      content: [
+        { type: 'text', text: prompt },
+        { type: 'image_url', image_url: { url: imageDataUrl } }
+      ]
+    }]);
+  },
+
+  async _chatJSON(c, messages) {
+    const resp = await fetch(c.baseUrl.replace(/\/+$/, '') + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + c.apiKey },
+      body: JSON.stringify({ model: c.model || 'gpt-4o-mini', temperature: 0, messages })
+    });
+    if (!resp.ok) throw new Error('HTTP ' + resp.status);
+    const data = await resp.json();
+    let content = data.choices && data.choices[0] && data.choices[0].message
+      ? data.choices[0].message.content : '{}';
+    content = String(content).replace(/```json|```/g, '').trim();
+    const m = content.match(/\{[\s\S]*\}/);
+    return JSON.parse(m ? m[0] : content);
+  },
+
   /** 把大模型返回的 JSON 规整为内部参数结构 */
   _fromLLM(obj) {
     const p = {};

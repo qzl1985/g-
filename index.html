@@ -138,6 +138,44 @@
         </div>
       </div>
 
+      <div class="card" id="billCard">
+        <h2>🧾 电费单校准 <small>（计费真值 · 结合负荷表算得更准）</small></h2>
+        <p class="hint">上传电费单（<b>PDF / 图片</b>，可多张多月）或粘贴文字，AI 识别后与负荷表<b>交叉校准</b>：以电费单的分时电量、最大需量、变压器容量为准。支持大模型视觉/文本识别、PDF 提取、手工录入。</p>
+        <div class="import-row">
+          <input type="file" id="billFile" accept=".pdf,image/*,.txt" multiple />
+          <button class="btn-ghost mini" id="billSample">看示例</button>
+        </div>
+        <textarea id="billPaste" rows="3" placeholder="或在此粘贴电费单文字（含 尖/峰/平/谷电量、最大需量、受电容量、电费合计 等）…"></textarea>
+        <div class="import-row">
+          <button class="btn-secondary" id="billParseBtn">🔍 识别电费单</button>
+          <span class="hint" id="billExtractNote"></span>
+        </div>
+
+        <details class="param-group" id="billFormWrap">
+          <summary>✍️ 结构化录入 / 校对（识别结果可在此修改，也可直接手填）</summary>
+          <div class="param-body">
+            <div class="field"><label>计费月份 <small>1~12</small></label><input type="number" id="bf_month" min="1" max="12" /></div>
+            <div class="field"><label>尖峰电量 <small>kWh</small></label><input type="number" id="bf_sharp" /></div>
+            <div class="field"><label>高峰电量 <small>kWh</small></label><input type="number" id="bf_peak" /></div>
+            <div class="field"><label>平段电量 <small>kWh</small></label><input type="number" id="bf_flat" /></div>
+            <div class="field"><label>低谷电量 <small>kWh</small></label><input type="number" id="bf_valley" /></div>
+            <div class="field"><label>总电量 <small>kWh</small></label><input type="number" id="bf_total" /></div>
+            <div class="field"><label>最大需量 <small>kW</small></label><input type="number" id="bf_maxDemand" /></div>
+            <div class="field"><label>变压器容量 <small>kVA</small></label><input type="number" id="bf_transformerKVA" /></div>
+            <div class="field"><label>基本电费 <small>元</small></label><input type="number" id="bf_basicFee" /></div>
+            <div class="field"><label>电费合计 <small>元</small></label><input type="number" id="bf_totalFee" /></div>
+          </div>
+          <div class="actions"><button class="btn-ghost mini" id="billAddBtn">➕ 添加这张单</button></div>
+        </details>
+
+        <div id="billList" class="bill-list"></div>
+        <div class="actions">
+          <button class="btn-primary" id="billApplyBtn">↧ 应用校准并测算</button>
+          <button class="btn-ghost" id="billClearBtn">清空电费单</button>
+        </div>
+        <div class="explain hidden" id="billNote"></div>
+      </div>
+
       <div class="card" id="importCard">
         <h2>📥 导入用电负荷表 <small>（Excel / CSV · 可多选 · 15 分钟数据 · AI 自动识别测算）</small></h2>
         <p class="hint">上传电力公司导出的负荷表（<b>.xlsx Excel</b> 或 CSV/TXT，<b>可一次选多个文件</b>），或直接粘贴数据。系统自动识别时间列、数值列与采样间隔，算出<b>真实最大需量、各月电量、逐时负荷曲线</b>并直接测算出结果。</p>
@@ -402,6 +440,8 @@
   <script src="js/forecast.js"></script>
   <script src="js/xlsx.js"></script>
   <script src="js/loadparser.js"></script>
+  <script src="js/pdfreader.js"></script>
+  <script src="js/billparser.js"></script>
   <script src="js/assistant.js"></script>
   <script src="js/app.js"></script>
 </body>

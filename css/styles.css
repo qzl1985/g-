@@ -218,6 +218,15 @@ td.pos { color: var(--green); } td.neg { color: var(--red); }
 .mini-x:hover { color: var(--red); }
 #compareTable th, #compareTable td { text-align: left; }
 
+/* ---------- 电费单 ---------- */
+.bill-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.bill-item { display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  background: var(--bg-soft); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; font-size: 12.5px; }
+.bill-item .x { color: var(--muted); cursor: pointer; }
+.bill-item .x:hover { color: var(--red); }
+#billPaste { width: 100%; background: var(--bg-soft); border: 1px solid var(--line); color: var(--text);
+  border-radius: 9px; padding: 9px 11px; font-size: 12.5px; resize: vertical; margin-bottom: 10px; font-family: inherit; }
+
 /* ---------- 可研级 ---------- */
 .switch-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; cursor: pointer; }
 .switch-row input { width: 18px; height: 18px; }
