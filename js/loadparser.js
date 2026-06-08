@@ -11,13 +11,22 @@
  */
 
 const LoadParser = {
+  // 文本入口（CSV / 粘贴）：拆分后交给 parseRows
   parse(text, opts) {
     opts = opts || {};
     const lines = String(text || '').replace(/\r/g, '').split('\n').filter(l => l.trim().length);
     if (lines.length < 2) return { ok: false, error: '数据太少：至少需要表头或若干行数据。' };
-
     const delim = this._detectDelim(lines);
     const rows = lines.map(l => this._split(l, delim));
+    return this.parseRows(rows, opts);
+  },
+
+  // 二维数组入口（xlsx 解析后、或多文件合并后调用）
+  parseRows(rows, opts) {
+    opts = opts || {};
+    rows = (rows || []).filter(r => r && r.some(c => String(c == null ? '' : c).trim().length));
+    if (rows.length < 2) return { ok: false, error: '数据太少：至少需要表头或若干行数据。' };
+    rows = rows.map(r => r.map(c => String(c == null ? '' : c).trim()));
     const hasHeader = this._looksHeader(rows[0]);
     const header = hasHeader ? rows[0].map(s => s.trim()) : null;
     const dataRows = hasHeader ? rows.slice(1) : rows;
@@ -160,6 +169,17 @@ const LoadParser = {
     const tm = s.match(/(\d{1,2}):(\d{2})/);
     if (dm) { out.hasDate = true; out.mo = Math.min(11, Math.max(0, parseInt(dm[2], 10) - 1)); }
     if (tm) { out.h = Math.min(23, parseInt(tm[1], 10)); out.mi = parseInt(tm[2], 10); }
+    // Excel 序列日期（数值，如 45292.5104）：约 1954–2119 年区间
+    if (!dm && !tm) {
+      const num = parseFloat(String(s).trim());
+      if (isFinite(num) && num > 20000 && num < 80000) {
+        const d = new Date(Date.UTC(1899, 11, 30) + Math.round(num * 86400) * 1000);
+        out.hasDate = true;
+        out.mo = d.getUTCMonth();
+        out.h = d.getUTCHours();
+        out.mi = d.getUTCMinutes();
+      }
+    }
     return out;
   },
 

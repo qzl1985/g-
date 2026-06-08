@@ -222,6 +222,7 @@ const App = {
 
     // 负荷表导入
     document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
+    document.getElementById('loadPaste').addEventListener('input', () => { this._importedRows = null; this._importedNames = null; });
     document.getElementById('parseLoadBtn').addEventListener('click', () => this.parseLoadTable());
     document.getElementById('applyLoadBtn').addEventListener('click', () => this.applyLoadTable());
     document.getElementById('loadSample').addEventListener('click', () => this.showLoadSample());
@@ -607,29 +608,60 @@ const App = {
     return sz;
   },
 
-  // ============ 负荷表导入（15 分钟数据，CSV / 粘贴） ============
-  onLoadFile(e) {
-    const file = e.target.files && e.target.files[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = () => {
-      document.getElementById('loadPaste').value = String(reader.result || '').slice(0, 4000000);
+  // ============ 负荷表导入（Excel/CSV · 多文件 · 15 分钟数据） ============
+  async onLoadFile(e) {
+    const files = Array.from((e.target && e.target.files) || []);
+    if (!files.length) return;
+    const note = document.getElementById('importNote');
+    note.textContent = '正在识别 ' + files.length + ' 个文件…';
+    note.classList.remove('hidden');
+    try {
+      let allRows = [];
+      const names = [];
+      for (const f of files) {
+        const rows = await this.readFileToRows(f);
+        allRows = allRows.concat(rows);
+        names.push(f.name);
+      }
+      this._importedRows = allRows;
+      this._importedNames = names;
+      document.getElementById('loadPaste').value = '';   // 文件优先，清空粘贴框
       this.parseLoadTable();
-    };
-    reader.onerror = () => alert('文件读取失败，请改用粘贴方式。');
-    reader.readAsText(file, 'utf-8');
+    } catch (err) {
+      this._importedRows = null;
+      note.textContent = '文件识别失败：' + (err.message || err) +
+        '\n仅支持 .xlsx 与 CSV/TXT；旧版 .xls 请在 Excel 中"另存为" .xlsx 或 CSV。';
+    }
+  },
+
+  // 把单个文件读成二维数组（xlsx 走解压解析；CSV/TXT 按分隔符拆分）
+  async readFileToRows(file) {
+    if (/\.xlsx$/i.test(file.name)) {
+      const ab = await file.arrayBuffer();
+      return await XlsxReader.read(ab);
+    }
+    const text = await file.text();
+    const lines = String(text).replace(/\r/g, '').split('\n').filter(l => l.trim().length);
+    const delim = LoadParser._detectDelim(lines);
+    return lines.map(l => LoadParser._split(l, delim));
   },
 
   parseLoadTable() {
-    const text = document.getElementById('loadPaste').value.trim();
     const note = document.getElementById('importNote');
     const preview = document.getElementById('importPreview');
     const applyRow = document.getElementById('importApplyRow');
-    if (!text) { alert('请先选择 CSV 文件或粘贴负荷数据'); return; }
     const kind = document.getElementById('valueKindSel').value || undefined;
-    let res;
-    try { res = LoadParser.parse(text, { valueKind: kind }); }
-    catch (err) { res = { ok: false, error: err.message }; }
+    let res, fromFiles = false;
+    try {
+      if (this._importedRows && this._importedRows.length) {
+        res = LoadParser.parseRows(this._importedRows, { valueKind: kind });
+        fromFiles = true;
+      } else {
+        const text = document.getElementById('loadPaste').value.trim();
+        if (!text) { alert('请先选择 Excel/CSV 文件或粘贴负荷数据'); return; }
+        res = LoadParser.parse(text, { valueKind: kind });
+      }
+    } catch (err) { res = { ok: false, error: err.message }; }
 
     if (!res.ok) {
       note.textContent = '识别失败：' + res.error;
@@ -638,7 +670,9 @@ const App = {
       return;
     }
     this._parsedLoad = res;
-    note.textContent = res.note;
+    const filePrefix = (fromFiles && this._importedNames && this._importedNames.length)
+      ? `已导入 ${this._importedNames.length} 个文件：${this._importedNames.join('、')}\n` : '';
+    note.textContent = filePrefix + res.note;
     note.classList.remove('hidden');
 
     const mx = Math.max.apply(null, res.hourly) || 1;
@@ -663,8 +697,8 @@ const App = {
     this.renderMonths();
     this.renderHourly();
     this.updateLoadTierUI();
-    alert('已填入测算：年用电 ' + (res.annualKwh / 1e4).toFixed(1) + ' 万kWh、各月电量、' +
-          '最大需量 ' + res.peakKw + ' kW、逐时负荷曲线。\n现在可直接点"开始测算"。');
+    // ③ AI 直接算出结果并显示在页面（自动测算 + 滚动到结果）
+    this.run();
   },
 
   showLoadSample() {
