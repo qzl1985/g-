@@ -66,17 +66,19 @@ const App = {
 
   // ============ 初始化 ============
   init() {
-    this.fillRegions();
-    this.fillLoadProfiles();
-    this.renderMonths();
-    this.renderHourly();
-    this.renderDeviceToggles();
-    this.renderParamForms();
-    this.updateLoadTierUI();
-    this.updateStorageSizingUI();
-    this.bindEvents();
-    this.loadLlmConfig();
-    this.renderCompare();
+    // 每一步独立容错：任一步出错都不致整页空白
+    const safe = (label, fn) => { try { fn(); } catch (e) { console.error('[init] ' + label, e); } };
+    safe('fillRegions', () => this.fillRegions());
+    safe('fillLoadProfiles', () => this.fillLoadProfiles());
+    safe('renderMonths', () => this.renderMonths());
+    safe('renderHourly', () => this.renderHourly());
+    safe('renderDeviceToggles', () => this.renderDeviceToggles());
+    safe('renderParamForms', () => this.renderParamForms());
+    safe('updateLoadTierUI', () => this.updateLoadTierUI());
+    safe('updateStorageSizingUI', () => this.updateStorageSizingUI());
+    safe('bindEvents', () => this.bindEvents());
+    safe('loadLlmConfig', () => this.loadLlmConfig());
+    safe('renderCompare', () => this.renderCompare());
   },
 
   // 渲染 12 个月用电量输入
@@ -370,7 +372,7 @@ const App = {
       ['总投资', s => this.money(s.capex, cur(s))],
       ['净现值 NPV', s => this.money(s.npv, cur(s))],
       ['内部收益率 IRR', s => s.irr !== null && s.irr !== undefined ? (s.irr * 100).toFixed(1) + '%' : '—'],
-      ['静态回本期', s => isFinite(s.payback) ? s.payback.toFixed(1) + ' 年' : '∞'],
+      ['静态回本期', s => (s.payback != null && isFinite(s.payback)) ? s.payback.toFixed(1) + ' 年' : '∞'],
       ['平准度电成本', s => s.lcoe && isFinite(s.lcoe) ? s.lcoe.toFixed(3) : '—'],
       ['年均净收益', s => this.money(s.avgAnnual, cur(s))],
       ['碳减排(tCO₂)', s => Math.round(s.carbon).toLocaleString()]
@@ -778,7 +780,7 @@ const App = {
       const out = Optimizer.optimizeCapacity(base, cons, (p) => { bar.style.width = (p * 100) + '%'; });
       bar.style.width = '100%';
       this.lastOpt = out;
-      this.renderOptResults(out, base.region.currency);
+      this.renderOptResults(out, REGIONS[base.regionKey].currency);
       setTimeout(() => prog.classList.add('hidden'), 400);
     }, 50);
   },
@@ -820,13 +822,13 @@ const App = {
     const base = this.buildConfig({ mode: 'simplified' });
     if (!base.selected.storage) { alert('请先选择储能设备'); return; }
     const out = Optimizer.optimizeDispatch(base);
-    const cur = base.region.currency;
+    const cur = REGIONS[base.regionKey].currency;
     document.getElementById('dispatchResults').classList.remove('hidden');
     const rows = out.all.map(s => `<tr>
       <td>${s.label}${s.key === out.best.key ? ' ✅' : ''}</td>
       <td>${this.money(s.npv, cur)}</td>
       <td>${s.irr !== null ? (s.irr * 100).toFixed(1) + '%' : '—'}</td>
-      <td>${isFinite(s.payback) ? s.payback.toFixed(1) + ' 年' : '∞'}</td>
+      <td>${(s.payback != null && isFinite(s.payback)) ? s.payback.toFixed(1) + ' 年' : '∞'}</td>
     </tr>`).join('');
     document.getElementById('dispatchTable').innerHTML =
       `<thead><tr><th>策略</th><th>净现值</th><th>IRR</th><th>回本期</th></tr></thead><tbody>${rows}</tbody>`;
