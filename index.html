@@ -183,6 +183,54 @@
         <div id="paramForms"></div>
       </div>
 
+      <div class="card" id="engCard">
+        <h2>🏛 可研级评价 <small>（设计院级：组件级发电 P50/P90 + 融资/税务/三大报表）</small></h2>
+        <label class="switch-row">
+          <input type="checkbox" id="engEnable" />
+          <span>启用可研级财务评价（项目/资本金 IRR、双基准 NPV、DSCR、三大报表、敏感性）</span>
+        </label>
+        <div id="engParams" class="hidden">
+          <h3>① 光伏发电（组件级 · GB50797）</h3>
+          <div class="field-row4">
+            <div class="field"><label>倾角 (°)<small>留空=最佳</small></label><input type="number" id="pvTilt" placeholder="最佳" /></div>
+            <div class="field"><label>方位角 (°)<small>0=正南</small></label><input type="number" id="pvAzimuth" value="0" /></div>
+            <div class="field"><label>容配比 DC/AC</label><input type="number" id="pvDcac" value="1.15" step="0.05" /></div>
+            <div class="field"><label>组件型号</label><select id="pvModuleSel"></select></div>
+          </div>
+
+          <h3>② 融资方案</h3>
+          <div class="field-row4">
+            <div class="field"><label>资本金比例 (%)</label><input type="number" id="finEquity" value="30" /></div>
+            <div class="field"><label>贷款利率 (%)</label><input type="number" id="finRate" value="4.5" step="0.1" /></div>
+            <div class="field"><label>贷款期限 (年)</label><input type="number" id="finYears" value="15" /></div>
+            <div class="field"><label>还款方式</label>
+              <select id="finRepay"><option value="equal-principal">等额本金</option><option value="equal-payment">等额本息</option></select>
+            </div>
+          </div>
+
+          <h3>③ 税务与折旧</h3>
+          <div class="field-row4">
+            <div class="field"><label>所得税率 (%)</label><input type="number" id="taxRate" value="25" /></div>
+            <div class="field"><label>增值税率 (%)<small>自用为主可填0</small></label><input type="number" id="vatRate" value="0" /></div>
+            <div class="field"><label>折旧年限 (年)</label><input type="number" id="depYears" value="20" /></div>
+            <div class="field"><label>残值率 (%)</label><input type="number" id="residualRate" value="5" /></div>
+          </div>
+          <label class="switch-row">
+            <input type="checkbox" id="taxHoliday" checked />
+            <span>所得税"三免三减半"（前 3 年免征、第 4~6 年减半）</span>
+          </label>
+
+          <h3>④ 上网/消纳模式</h3>
+          <div class="field">
+            <select id="onGridMode">
+              <option value="self_surplus">自发自用 · 余电上网</option>
+              <option value="full_grid">全额上网</option>
+              <option value="self_only">全部自发自用</option>
+            </select>
+          </div>
+        </div>
+      </div>
+
       <div class="actions">
         <button class="btn-primary" id="runBtn">▶ 开始测算</button>
         <button class="btn-ghost" id="resetBtn">重置参数</button>
@@ -213,6 +261,26 @@
           <h3>逐年现金流明细</h3>
           <div class="table-wrap"><table id="cashTable"></table></div>
         </div>
+
+        <section id="engResults" class="hidden">
+          <h2>🏛 可研级财务评价</h2>
+          <h3>光伏发电（P50/P90）</h3>
+          <div class="kpi-grid" id="engGenKpi"></div>
+          <h3>财务指标（含融资·税务）</h3>
+          <div class="kpi-grid" id="engFinKpi"></div>
+          <div class="card">
+            <h3>利润表（逐年摘要）</h3>
+            <div class="table-wrap"><table id="engIncomeTable"></table></div>
+          </div>
+          <div class="card">
+            <h3>现金流量表（项目 / 资本金）</h3>
+            <div class="table-wrap"><table id="engCashTable"></table></div>
+          </div>
+          <div class="card">
+            <h3>敏感性分析（单因素 ±10% → 项目 IRR）</h3>
+            <div class="table-wrap"><table id="engSensTable"></table></div>
+          </div>
+        </section>
       </section>
     </section>
 

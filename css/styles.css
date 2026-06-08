@@ -218,6 +218,13 @@ td.pos { color: var(--green); } td.neg { color: var(--red); }
 .mini-x:hover { color: var(--red); }
 #compareTable th, #compareTable td { text-align: left; }
 
+/* ---------- 可研级 ---------- */
+.switch-row { display: flex; align-items: center; gap: 10px; padding: 6px 0; font-size: 13.5px; cursor: pointer; }
+.switch-row input { width: 18px; height: 18px; }
+#engParams h3, #engResults h3 { font-size: 13.5px; color: var(--cyan); margin: 16px 0 8px; }
+#engResults h2 { margin-top: 22px; border-top: 1px solid var(--line); padding-top: 18px; }
+#engResults .table-wrap { max-height: 360px; overflow: auto; }
+
 /* ---------- misc ---------- */
 .hidden { display: none !important; }
 .app-footer { text-align: center; font-size: 11.5px; color: var(--muted); padding: 18px; border-top: 1px solid var(--line); }

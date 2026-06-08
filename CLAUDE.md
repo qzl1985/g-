@@ -36,6 +36,18 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   and `capacityCharge` (元/kVA/月, by transformer capacity).
 - `js/finance.js` — `Finance`: NPV, IRR (bisection), static/dynamic payback,
   LCOE, `summarize()`.
+- `js/devicedb.js` — `DEVICE_DB`: PV module / inverter / battery model library +
+  standard transformer kVA series (`pickTransformer`).
+- `js/weather.js` — `Weather`: per-region approximate TMY (annual GHI, monthly
+  distribution, ambient temp, year-to-year σ) + tilted-plane POA transposition.
+- `js/pvmodel.js` — `PvModel.generate(p)`: component-level PV output (temp coef/
+  NOCT/DCAC/inverter eff/system losses) → monthly/annual gen, PR, equiv hours,
+  **P50/P90**. `generateYears` for multi-year with degradation. Depends on
+  Weather + DEVICE_DB.
+- `js/finance2.js` — `Finance2.evaluate(p)`: 可研-grade财务 — IDC, loan schedule
+  (equal-principal/payment), depreciation, income tax (三免三减半), income/
+  cashflow/balance statements, **project & equity IRR**, dual-ic NPV, DSCR/ICR,
+  LCOE, single-factor sensitivity. Depends on Finance.
 - `js/engine.js` — `Engine`: device modeling + hourly storage dispatch
   (`dispatchDay`) + `run(cfg)`. Dual precision via `mode`:
   `simplified` (1 representative day ×365) vs `professional` (12 months ×
@@ -43,8 +55,10 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   `dataTier` (`template`/`tou`/`hourly` — see `buildLoadDay`), `transformerKVA`,
   `peakKw`, `basicFeeMode` (`auto`/`demand`/`capacity`). `basicFee()` computes
   two-part basic charge; storage demand-shaving only reduces it under demand
-  basis. Returns capex breakdown, per-year cashflow, finance, env, and a `load`
-  summary (annualKwh, peakKw, basic-fee basis/amounts, demandCut).
+  basis. Accepts `cfg.pvYieldEff` (kWh/kW·yr from PvModel) to override the
+  region constant. Returns capex breakdown, per-year cashflow, finance, env, a
+  `load` summary, plus `revenueByYear`/`replacementByYear`/`generationByYear`
+  (consumed by Finance2 in 可研 mode).
 - `js/optimizer.js` — `Optimizer`: `optimizeCapacity` (grid search + local
   refine), `optimizeDispatch` (compares 3 storage strategies), and
   `sizeStorage(cfg)` — back-calculates recommended storage kWh/kW from the load

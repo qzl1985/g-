@@ -76,9 +76,22 @@ const App = {
     safe('renderParamForms', () => this.renderParamForms());
     safe('updateLoadTierUI', () => this.updateLoadTierUI());
     safe('updateStorageSizingUI', () => this.updateStorageSizingUI());
+    safe('fillPvModules', () => this.fillPvModules());
     safe('bindEvents', () => this.bindEvents());
     safe('loadLlmConfig', () => this.loadLlmConfig());
     safe('renderCompare', () => this.renderCompare());
+  },
+
+  fillPvModules() {
+    const sel = document.getElementById('pvModuleSel');
+    if (!sel || typeof DEVICE_DB === 'undefined') return;
+    sel.innerHTML = DEVICE_DB.pvModules.map(m => `<option value="${m.id}">${m.name}</option>`).join('');
+    sel.value = 'ntype_590';
+  },
+
+  engineeringOn() {
+    const el = document.getElementById('engEnable');
+    return !!(el && el.checked);
   },
 
   // 渲染 12 个月用电量输入
@@ -219,6 +232,11 @@ const App = {
     });
     // 立即反算储能容量
     document.getElementById('sizeStorageBtn').addEventListener('click', () => this.doSizeStorage(true));
+
+    // 可研级评价开关
+    document.getElementById('engEnable').addEventListener('change', () => {
+      document.getElementById('engParams').classList.toggle('hidden', !this.engineeringOn());
+    });
 
     // 负荷表导入
     document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
@@ -722,12 +740,29 @@ const App = {
       if (!Object.values(cfg.selected).some(Boolean)) { alert('请至少选择一种设备'); return; }
       const ann = cfg.load.monthly ? cfg.load.monthly.reduce((a, b) => a + (+b || 0), 0) : (cfg.load.annualKwh || 0);
       if (!ann) { alert('请填写各月用电量（可用"均摊到 12 月"快速填写）'); return; }
+
+      // 可研模式：先用组件级 PvModel 设定等效发电量，使现金流与发电精算一致
+      let pvGen = null;
+      if (this.engineeringOn() && cfg.selected.pv) {
+        pvGen = this.computePv(cfg);
+        if (pvGen) cfg.pvYieldEff = pvGen.nominalPerKw;
+      }
+
       const result = Engine.run(cfg);
       this.state.lastResult = result;
       this.state.lastCfg = cfg;
-      // 先显示结果区，保证 canvas 有实际宽度后再绘图（否则图表为空白）
       document.getElementById('results').classList.remove('hidden');
       this.renderResults(result);
+
+      // 可研级财务评价
+      const engBox = document.getElementById('engResults');
+      if (this.engineeringOn()) {
+        const f2 = this.runFinance2(cfg, result);
+        this.renderEngineering(f2, pvGen, result);
+        engBox.classList.remove('hidden');
+      } else {
+        engBox.classList.add('hidden');
+      }
       document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {
       console.error(e);
@@ -794,6 +829,121 @@ const App = {
     }).join('');
     document.getElementById('cashTable').innerHTML =
       `<thead><tr><th>年度</th><th>当年现金流</th><th>累计现金流</th></tr></thead><tbody>${rows}</tbody>`;
+  },
+
+  // ============ 可研级评价编排 ============
+  computePv(cfg) {
+    if (typeof PvModel === 'undefined') return null;
+    const g = id => document.getElementById(id);
+    const tiltV = parseFloat(g('pvTilt').value);
+    const moduleId = g('pvModuleSel').value;
+    const mod = DEVICE_DB.pvModule(moduleId);
+    // 让引擎逐年衰减与所选组件一致
+    cfg.pv.degradationY1 = mod.degradeY1;
+    cfg.pv.degradation = mod.degrade;
+    const params = {
+      regionKey: cfg.regionKey, capacityKw: cfg.pv.capacityKw,
+      tilt: isFinite(tiltV) ? tiltV : undefined,
+      azimuth: parseFloat(g('pvAzimuth').value) || 0,
+      dcac: parseFloat(g('pvDcac').value) || 1.15,
+      moduleId, year: 0
+    };
+    const g0 = PvModel.generate(params);
+    const nominalPerKw = (g0.annual / (g0.detail.degrade || 1)) / (cfg.pv.capacityKw || 1);
+    return Object.assign({}, g0, { nominalPerKw });
+  },
+
+  financeParams() {
+    const num = id => parseFloat(document.getElementById(id).value);
+    const equityRatio = (num('finEquity') || 30) / 100;
+    const holiday = document.getElementById('taxHoliday').checked;
+    return {
+      financing: {
+        loanRatio: Math.max(0, Math.min(1, 1 - equityRatio)),
+        loanRate: (num('finRate') || 4.5) / 100,
+        loanYears: num('finYears') || 15,
+        grace: 0, repay: document.getElementById('finRepay').value, constructionMonths: 6
+      },
+      tax: {
+        incomeTaxRate: (num('taxRate') || 25) / 100,
+        freeYears: holiday ? 3 : 0, halfYears: holiday ? 3 : 0,
+        vatRate: (num('vatRate') || 0) / 100, surchargeRate: 0.12
+      },
+      dep: { years: num('depYears') || 20, residualRate: (num('residualRate') || 5) / 100 }
+    };
+  },
+
+  runFinance2(cfg, result) {
+    const fp = this.financeParams();
+    return Finance2.evaluate({
+      staticInvestment: result.capex, years: result.years,
+      revenueByYear: result.revenueByYear, omByYear: result.omByYear,
+      replacementByYear: result.replacementByYear, generationByYear: result.generationByYear,
+      financing: fp.financing, tax: fp.tax, dep: fp.dep, icList: [0.08, 0.06]
+    });
+  },
+
+  renderEngineering(f2, pvGen, result) {
+    const cur = result.region.currency;
+    const kpi = (arr, id) => {
+      document.getElementById(id).innerHTML = arr.map(k => `
+        <div class="kpi ${k.cls || ''}"><div class="label">${k.label}</div>
+        <div class="value">${k.value}<span class="unit">${k.unit || ''}</span></div></div>`).join('');
+    };
+
+    // 发电 P50/P90
+    const genBox = document.getElementById('engGenKpi');
+    if (pvGen) {
+      kpi([
+        { label: 'P50 年发电', value: (pvGen.p50 / 1e4).toFixed(1), unit: '万kWh' },
+        { label: 'P90 年发电', value: (pvGen.p90 / 1e4).toFixed(1), unit: '万kWh' },
+        { label: '系统效率 PR', value: (pvGen.pr * 100).toFixed(1) + '%', cls: 'good' },
+        { label: '等效利用小时', value: pvGen.hours, unit: 'h' },
+        { label: '阵列倾角', value: pvGen.detail.tilt, unit: '°' }
+      ], 'engGenKpi');
+    } else {
+      genBox.innerHTML = '<div class="hint">本方案未含光伏。</div>';
+    }
+
+    const I = f2.indicators;
+    kpi([
+      { label: '总投资(动态)', value: this.money(f2.totalInvestment, cur) },
+      { label: '其中资本金', value: this.money(f2.equity, cur) },
+      { label: '项目 IRR', value: I.projectIRR !== null ? (I.projectIRR * 100).toFixed(2) + '%' : '—', cls: 'good' },
+      { label: '资本金 IRR', value: I.equityIRR !== null ? (I.equityIRR * 100).toFixed(2) + '%' : '—', cls: 'good' },
+      { label: 'NPV@8%', value: this.money(I.npv['0.08'], cur), cls: I.npv['0.08'] > 0 ? 'good' : 'bad' },
+      { label: 'NPV@6%', value: this.money(I.npv['0.06'], cur), cls: I.npv['0.06'] > 0 ? 'good' : 'bad' },
+      { label: '静态回收', value: isFinite(I.paybackStatic) ? I.paybackStatic.toFixed(1) : '∞', unit: '年' },
+      { label: 'LCOE', value: I.lcoe && isFinite(I.lcoe) ? I.lcoe.toFixed(3) : '—', unit: cur + '/kWh' },
+      { label: '最小 DSCR', value: I.dscr.min != null ? I.dscr.min.toFixed(2) : '—', cls: (I.dscr.min || 0) >= 1.2 ? 'good' : 'warn' },
+      { label: '最小 ICR', value: I.icr.min != null ? I.icr.min.toFixed(2) : '—' }
+    ], 'engFinKpi');
+
+    // 利润表
+    const inc = f2.income.map(a => `<tr>
+      <td>第${a.year}年</td><td>${this.money(a.revenue, cur)}</td><td>${this.money(a.dep, cur)}</td>
+      <td>${this.money(a.interest, cur)}</td><td>${(a.taxRate * 100).toFixed(0)}%</td>
+      <td>${this.money(a.tax, cur)}</td><td class="${a.netProfit >= 0 ? 'pos' : 'neg'}">${this.money(a.netProfit, cur)}</td></tr>`).join('');
+    document.getElementById('engIncomeTable').innerHTML =
+      `<thead><tr><th>年度</th><th>营业收入</th><th>折旧</th><th>利息</th><th>税率</th><th>所得税</th><th>净利润</th></tr></thead><tbody>${inc}</tbody>`;
+
+    // 现金流量表
+    let cumP = -f2.totalInvestment, cumE = -f2.equity;
+    const cf = f2.cashflowProject.map((p, i) => {
+      cumP += p; cumE += f2.cashflowEquity[i];
+      return `<tr><td>第${i + 1}年</td>
+        <td class="${p >= 0 ? 'pos' : 'neg'}">${this.money(p, cur)}</td><td>${this.money(cumP, cur)}</td>
+        <td class="${f2.cashflowEquity[i] >= 0 ? 'pos' : 'neg'}">${this.money(f2.cashflowEquity[i], cur)}</td><td>${this.money(cumE, cur)}</td></tr>`;
+    }).join('');
+    document.getElementById('engCashTable').innerHTML =
+      `<thead><tr><th>年度</th><th>项目现金流</th><th>累计</th><th>资本金现金流</th><th>累计</th></tr></thead><tbody>${cf}</tbody>`;
+
+    // 敏感性
+    const sens = f2.sensitivity.map(s => `<tr><td>${s.factor}</td>
+      <td>${s.irrLo !== null ? (s.irrLo * 100).toFixed(2) + '%' : '—'}</td>
+      <td>${s.irrHi !== null ? (s.irrHi * 100).toFixed(2) + '%' : '—'}</td></tr>`).join('');
+    document.getElementById('engSensTable').innerHTML =
+      `<thead><tr><th>因素</th><th>-10% 时</th><th>+10% 时</th></tr></thead><tbody>${sens}</tbody>`;
   },
 
   // ============ 优化 ============

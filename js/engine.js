@@ -85,8 +85,9 @@ const Engine = {
    * @param yearDegradeFactor 当年衰减系数(≤1)
    * @param monthFactor 月度辐照系数(专业版传入，简化版=1)
    */
-  buildPvDay(capacityKw, region, yearDegradeFactor = 1, monthFactor = 1) {
-    const annualGen = capacityKw * region.pvYield * yearDegradeFactor; // kWh/年
+  buildPvDay(capacityKw, region, yearDegradeFactor = 1, monthFactor = 1, yieldPerKw) {
+    const y = (yieldPerKw != null) ? yieldPerKw : region.pvYield;  // 可由 PvModel 给出更精确的等效发电量
+    const annualGen = capacityKw * y * yearDegradeFactor;          // kWh/年
     const dailyGen = (annualGen / 365) * monthFactor;
     const sumShape = PV_PROFILE_BASE.reduce((a, b) => a + b, 0);
     return PV_PROFILE_BASE.map(s => (s / sumShape) * dailyGen);
@@ -320,10 +321,15 @@ const Engine = {
     const withMaxDemand = Math.max(0, peakKw - storageDemandCut);
     const withBasic = this.basicFee(withMaxDemand, transformerKVA, region, basicFeeMode);
 
+    // 等效发电量(kWh/kW·年)：可研模式下由 PvModel 提供，否则用地区缺省
+    const pvYieldEff = cfg.pvYieldEff || region.pvYield;
+
     // ---------- 逐年模拟 ----------
     const annualNet = [];
     const omByYear = [];
     const energyByYear = [];
+    const revenueByYear = [];        // 营业收入(电费节省+上网+充电+柴发调峰)
+    const replacementByYear = [];    // 设备更换现金流出(储能等)
     let totalPvGen = 0, totalCarbonCut = 0, totalStoreThroughput = 0;
 
     // 充电桩、柴发年值（首年，后续保持稳定）
@@ -348,7 +354,7 @@ const Engine = {
 
       months.forEach(mo => {
         const loadDay = this.buildLoadDay(mo.dailyKwh, load, region);
-        const pvDay = sel.pv ? this.buildPvDay(cfg.pv.capacityKw, region, pvFactor, mo.monthFactor)
+        const pvDay = sel.pv ? this.buildPvDay(cfg.pv.capacityKw, region, pvFactor, mo.monthFactor, pvYieldEff)
                              : new Array(24).fill(0);
         const demandCap = demandMgmt ? (peakKw * 0.75) : null;
         const d = this.dispatchDay({
@@ -374,17 +380,20 @@ const Engine = {
       if (sel.charger) om += chg.om;
       if (sel.diesel) om += dsl.om;
 
-      // 当年净收益 = 电费节省 + 上网收入 + 充电桩净收入 + 柴发调峰价值 − 运维
+      // 营业收入 = 电费节省 + 上网收入 + 充电桩净收入 + 柴发调峰价值
       const electricitySaving = baselineAnnualCost - energyCostWithSystem;
-      let net = electricitySaving + yearExport - om;
-      if (sel.charger) net += chg.net;
-      if (sel.diesel) net += dsl.peakShaveValue;
+      let revenue = electricitySaving + yearExport;
+      if (sel.charger) revenue += chg.net;
+      if (sel.diesel) revenue += dsl.peakShaveValue;
 
       // 储能到寿命需更换（第 lifeYears 年末计入更换成本）
+      let replacement = 0;
       if (sel.storage && cfg.storage.lifeYears && (y + 1) === cfg.storage.lifeYears && (y + 1) < years) {
-        const replaceCost = cfg.storage.capacityKwh * cfg.storage.capexPerWh * 1000 * 0.6; // 电芯降价，按 60%
-        net -= replaceCost;
+        replacement = cfg.storage.capacityKwh * cfg.storage.capexPerWh * 1000 * 0.6; // 电芯降价，按 60%
       }
+      let net = revenue - om - replacement;
+      revenueByYear.push(revenue);
+      replacementByYear.push(replacement);
 
       annualNet.push(net);
       omByYear.push(om);
@@ -410,6 +419,7 @@ const Engine = {
       capex, capexBreakdown,
       baselineAnnualCost,
       annualNet, omByYear,
+      revenueByYear, replacementByYear, generationByYear: energyByYear,
       finance: fin,
       env: {
         carbonCut: totalCarbonCut,    // tCO2 全周期
