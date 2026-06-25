@@ -78,14 +78,64 @@ const BillParser = {
    *  maxDemand,transformerKVA,basicFee,energyFee,totalFee,powerFactor */
   fromFields(o) {
     o = o || {};
-    const n = v => { const x = parseFloat(v); return isFinite(x) ? x : null; };
+    const n = v => { const x = parseFloat(String(v == null ? '' : v).replace(/,/g, '')); return isFinite(x) ? x : null; };
     let pf = n(o.powerFactor); if (pf != null && pf > 1) pf = pf / 100;
     return this.normalize({
-      month: o.month ? Math.min(12, Math.max(1, parseInt(o.month, 10))) : null,
+      month: this._month(o.month),
       energy: { sharp: n(o.sharp), peak: n(o.peak), flat: n(o.flat), valley: n(o.valley), total: n(o.total) },
       maxDemand: n(o.maxDemand), transformerKVA: n(o.transformerKVA),
       basicFee: n(o.basicFee), energyFee: n(o.energyFee), totalFee: n(o.totalFee), powerFactor: pf
     });
+  },
+
+  _month(v) {
+    if (v == null || v === '') return null;
+    const s = String(v);
+    const m = s.match(/(\d{1,2})\s*月/) || s.match(/^\s*(\d{1,2})\s*$/);
+    const mm = m ? parseInt(m[1], 10) : parseInt(s, 10);
+    return (mm >= 1 && mm <= 12) ? mm : null;
+  },
+
+  /**
+   * 表格解析：CSV/Excel 模板（一行 = 一张/一月电费单）→ Bill[]
+   * 按表头关键字映射列，无表头则无法识别。
+   * @param {string[][]} rows 二维数组
+   */
+  parseTable(rows) {
+    rows = (rows || []).filter(r => r && r.some(c => String(c == null ? '' : c).trim().length))
+                       .map(r => r.map(c => String(c == null ? '' : c).trim()));
+    if (rows.length < 2) return [];
+    const header = rows[0];
+    const idx = {};
+    header.forEach((h, i) => {
+      if (/尖/.test(h)) idx.sharp = i;
+      else if (/(高峰|峰段)|(^|[^尖平低])峰/.test(h)) idx.peak = i;
+      else if (/平段|平/.test(h)) idx.flat = i;
+      else if (/低谷|谷段|谷/.test(h)) idx.valley = i;
+      else if (/总.*电量|用电量|总电量|电量合计/.test(h)) idx.total = i;
+      else if (/需量/.test(h)) idx.maxDemand = i;
+      else if (/容量|变压器|受电/.test(h)) idx.transformerKVA = i;
+      else if (/基本电费/.test(h)) idx.basicFee = i;
+      else if (/电度|电量电费/.test(h)) idx.energyFee = i;
+      else if (/合计|总电费|应收/.test(h)) idx.totalFee = i;
+      else if (/月/.test(h)) idx.month = i;
+      else if (/功率因数|力率/.test(h)) idx.powerFactor = i;
+    });
+    // 至少要识别到电量或需量列才算有效模板
+    if (idx.total == null && idx.peak == null && idx.maxDemand == null) return [];
+    const bills = [];
+    for (let r = 1; r < rows.length; r++) {
+      const row = rows[r];
+      const get = k => (idx[k] != null ? row[idx[k]] : undefined);
+      const b = this.fromFields({
+        month: get('month'), sharp: get('sharp'), peak: get('peak'), flat: get('flat'),
+        valley: get('valley'), total: get('total'), maxDemand: get('maxDemand'),
+        transformerKVA: get('transformerKVA'), basicFee: get('basicFee'),
+        energyFee: get('energyFee'), totalFee: get('totalFee'), powerFactor: get('powerFactor')
+      });
+      if (b.energy.total || b.maxDemand || b.energy.peak) bills.push(b);
+    }
+    return bills;
   },
 
   /**

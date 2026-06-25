@@ -142,7 +142,8 @@
         <h2>🧾 电费单校准 <small>（计费真值 · 结合负荷表算得更准）</small></h2>
         <p class="hint">上传电费单（<b>PDF / 图片</b>，可多张多月）或粘贴文字，AI 识别后与负荷表<b>交叉校准</b>：以电费单的分时电量、最大需量、变压器容量为准。支持大模型视觉/文本识别、PDF 提取、手工录入。</p>
         <div class="import-row">
-          <input type="file" id="billFile" accept=".pdf,image/*,.txt" multiple />
+          <input type="file" id="billFile" accept=".pdf,image/*,.txt,.csv,.xlsx" multiple />
+          <button class="btn-ghost mini" id="billTemplate">⬇ 电费单模板</button>
           <button class="btn-ghost mini" id="billSample">看示例</button>
         </div>
         <textarea id="billPaste" rows="3" placeholder="或在此粘贴电费单文字（含 尖/峰/平/谷电量、最大需量、受电容量、电费合计 等）…"></textarea>
@@ -181,6 +182,7 @@
         <p class="hint">上传电力公司导出的负荷表（<b>.xlsx Excel</b> 或 CSV/TXT，<b>可一次选多个文件</b>），或直接粘贴数据。系统自动识别时间列、数值列与采样间隔，算出<b>真实最大需量、各月电量、逐时负荷曲线</b>并直接测算出结果。</p>
         <div class="import-row">
           <input type="file" id="loadFile" accept=".xlsx,.csv,.txt,text/csv,text/plain" multiple />
+          <button class="btn-ghost mini" id="loadTemplate">⬇ 负荷表模板</button>
           <button class="btn-ghost mini" id="loadSample">看示例格式</button>
         </div>
         <textarea id="loadPaste" rows="4" placeholder="或在此粘贴（每行一条，时间 + 数值）：&#10;2024-01-01 00:15, 320.5&#10;2024-01-01 00:30, 318.2&#10;2024-01-01 00:45, 305.0 …"></textarea>

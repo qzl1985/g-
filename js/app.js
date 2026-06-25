@@ -246,6 +246,8 @@ const App = {
     document.getElementById('billApplyBtn').addEventListener('click', () => this.applyBillCalibration());
     document.getElementById('billClearBtn').addEventListener('click', () => { this.state.bills = []; this.renderBillList(); document.getElementById('billNote').classList.add('hidden'); });
     document.getElementById('billSample').addEventListener('click', () => this.showBillSample());
+    document.getElementById('billTemplate').addEventListener('click', () => this.downloadBillTemplate());
+    document.getElementById('loadTemplate').addEventListener('click', () => this.downloadLoadTemplate());
 
     // 负荷表导入
     document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
@@ -673,10 +675,16 @@ const App = {
             continue;
           }
           fields = obj;
-        } else { // 文本文件
-          const text = await f.text();
+        } else { // CSV / Excel / 文本：先按"电费单模板表格(多月)"解析，否则按自由文本
+          let rows = null;
+          try { rows = await this.readFileToRows(f); } catch (e) {}
+          if (rows && rows.length) {
+            const list = BillParser.parseTable(rows);
+            if (list.length) { list.forEach(b => this.state.bills.push(b)); added += list.length; continue; }
+          }
+          const text = rows ? rows.map(r => r.join(' ')).join('\n') : await f.text();
           fields = await this._extractBill(text);
-          if (!this._hasBillData(fields)) { note.textContent = `「${f.name}」未识别到电费单数据，请改用结构化录入。`; continue; }
+          if (!this._hasBillData(fields)) { note.textContent = `「${f.name}」未识别到电费单数据，请套用「电费单模板」或用结构化录入。`; continue; }
         }
         if (this._hasBillData(fields)) { this.state.bills.push(BillParser.fromFields(fields)); added++; }
       } catch (err) { note.textContent = '识别出错：' + (err.message || err); }
@@ -811,6 +819,25 @@ const App = {
     noteEl.textContent = '电费单校准（计费真值）：\n· ' + r.notes.join('\n· ');
     noteEl.classList.remove('hidden');
     if (run) this.run();
+  },
+
+  downloadLoadTemplate() {
+    const BOM = String.fromCharCode(0xFEFF);
+    const rows = [['日期时间', '有功功率(kW)'],
+      ['2024-01-01 00:15', '320.5'], ['2024-01-01 00:30', '318.2'],
+      ['2024-01-01 00:45', '305.0'], ['2024-01-01 01:00', '300.1']];
+    this._download(BOM + rows.map(r => r.join(',')).join('\n'),
+      '负荷表模板_15分钟.csv', 'text/csv;charset=utf-8');
+  },
+
+  downloadBillTemplate() {
+    const BOM = String.fromCharCode(0xFEFF);
+    const header = ['计费月份', '尖峰电量(kWh)', '高峰电量(kWh)', '平段电量(kWh)', '低谷电量(kWh)',
+      '总电量(kWh)', '最大需量(kW)', '变压器容量(kVA)', '基本电费(元)', '电费合计(元)'];
+    const ex1 = ['7', '60000', '180000', '150000', '120000', '510000', '860', '2000', '34400', '392400'];
+    const ex2 = ['8', '62000', '185000', '152000', '125000', '524000', '880', '2000', '35200', '402000'];
+    this._download(BOM + [header, ex1, ex2].map(r => r.join(',')).join('\n'),
+      '电费单模板_可多月.csv', 'text/csv;charset=utf-8');
   },
 
   showBillSample() {
