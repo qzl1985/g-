@@ -133,10 +133,31 @@ const BillParser = {
 
     // 3) 最大需量、变压器容量、基本电费计费方式
     const demands = bills.map(b => b.maxDemand).filter(v => v);
-    const peakKw = demands.length ? Math.max.apply(null, demands) : (load ? load.peakKw : null);
-    if (demands.length) notes.push(`已按电费单设定最大需量 ${Math.round(peakKw)} kW`);
+    let peakKw = demands.length ? Math.max.apply(null, demands) : (load ? load.peakKw : null);
     const kvas = bills.map(b => b.transformerKVA).filter(v => v);
     const transformerKVA = kvas.length ? Math.max.apply(null, kvas) : (load ? load.transformerKVA : null);
+    if (transformerKVA) notes.push(`已确定变压器（受电）容量 ${Math.round(transformerKVA)} kVA（储能削峰将据此配置）`);
+    else notes.push('⚠ 未识别到变压器容量，请在电费单或表单中补充（影响储能削峰与基本电费）');
+
+    // —— 负荷表 ↔ 电费单 倍率匹配（互感器倍率自动反算） ——
+    let multiplier = null;
+    const billAnnual = monthly.reduce((a, c) => a + (c || 0), 0);
+    if (load && load.measuredAnnual && billAnnual > 0) {
+      multiplier = +(billAnnual / load.measuredAnnual).toFixed(2);
+      if (Math.abs(Math.log(multiplier)) > Math.log(1.5)) {
+        notes.push(`负荷表实测电量与电费单相差约 ×${multiplier}（疑似互感器倍率），已自动按电费单口径校正`);
+      } else {
+        notes.push(`负荷表实测电量与电费单倍率 ×${multiplier}（基本一致）`);
+      }
+    }
+    // 电费单无最大需量时，用负荷表峰值 × 倍率 反推
+    if (!demands.length && load && load.measuredPeakKw) {
+      peakKw = Math.round(load.measuredPeakKw * (multiplier || 1));
+      notes.push(`电费单未含最大需量，按负荷表峰值×倍率反推 ${peakKw} kW`);
+    } else if (demands.length) {
+      notes.push(`已按电费单设定最大需量 ${Math.round(peakKw)} kW`);
+    }
+
     // 基本电费计费方式：若同时有基本电费与最大需量，判断按需量还是按容量
     let basicFeeMode = (load && load.basicFeeMode) || 'auto';
     const b0 = bills.find(b => b.basicFee);
@@ -155,7 +176,7 @@ const BillParser = {
     crossCheck.warnings.forEach(w => notes.push('⚠ ' + w));
 
     return {
-      calibrated: { monthly, tou, dataTier, peakKw, transformerKVA, basicFeeMode },
+      calibrated: { monthly, tou, dataTier, peakKw, transformerKVA, basicFeeMode, multiplier },
       notes, crossCheck
     };
   },

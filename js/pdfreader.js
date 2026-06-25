@@ -38,11 +38,23 @@ const PdfReader = {
   async _ensurePdfjs() {
     if (typeof window === 'undefined') throw new Error('非浏览器环境');
     if (window.pdfjsLib) return window.pdfjsLib;
-    const base = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174';
-    await this._loadScript(base + '/pdf.min.js');
-    if (!window.pdfjsLib) throw new Error('pdf.js 未就绪');
-    window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + '/pdf.worker.min.js';
-    return window.pdfjsLib;
+    // 多 CDN 兜底（jsDelivr 在国内更易访问，其次 unpkg / cdnjs）
+    const cdns = [
+      'https://cdn.jsdelivr.net/npm/pdfjs-dist@3.11.174/build',
+      'https://unpkg.com/pdfjs-dist@3.11.174/build',
+      'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174'
+    ];
+    let lastErr;
+    for (const base of cdns) {
+      try {
+        await this._loadScript(base + '/pdf.min.js');
+        if (window.pdfjsLib) {
+          window.pdfjsLib.GlobalWorkerOptions.workerSrc = base + '/pdf.worker.min.js';
+          return window.pdfjsLib;
+        }
+      } catch (e) { lastErr = e; }
+    }
+    throw new Error('pdf.js 加载失败：' + (lastErr ? lastErr.message : '无网络'));
   },
 
   async _viaPdfjs(ab) {
@@ -56,6 +68,19 @@ const PdfReader = {
       out += c.items.map(it => it.str).join(' ') + '\n';
     }
     return out;
+  },
+
+  /** 把 PDF 首页渲染为图片 dataURL（供大模型视觉识别扫描件）。需 pdf.js + 浏览器 canvas。 */
+  async renderFirstPageImage(arrayBuffer, scale) {
+    const lib = await this._ensurePdfjs();
+    const doc = await lib.getDocument({ data: arrayBuffer.slice(0) }).promise;
+    const page = await doc.getPage(1);
+    const vp = page.getViewport({ scale: scale || 2 });
+    const canvas = document.createElement('canvas');
+    canvas.width = vp.width; canvas.height = vp.height;
+    const ctx = canvas.getContext('2d');
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    return canvas.toDataURL('image/png');
   },
 
   // 零依赖：抽取内容流中的文本算子
@@ -90,18 +115,29 @@ const PdfReader = {
 
   _extractOps(content) {
     let out = '';
-    // (字符串) Tj   以及  [(a)-12(b)] TJ
+    // (字符串) Tj
     const tj = /\(((?:\\.|[^\\()])*)\)\s*Tj/g;
-    const TJ = /\[((?:[^\[\]]|\\.)*)\]\s*TJ/g;
+    // <十六进制> Tj
+    const tjHex = /<([0-9A-Fa-f\s]+)>\s*Tj/g;
+    // [(a)-12(b)<hex>] TJ
+    const TJ = /\[((?:[^\[\]])*)\]\s*TJ/g;
     let m;
     while ((m = tj.exec(content))) out += this._unescape(m[1]);
+    while ((m = tjHex.exec(content))) out += this._hexToStr(m[1]);
     while ((m = TJ.exec(content))) {
       const inner = m[1];
-      const sre = /\(((?:\\.|[^\\()])*)\)/g; let s;
-      while ((s = sre.exec(inner))) out += this._unescape(s[1]);
+      const sre = /\(((?:\\.|[^\\()])*)\)|<([0-9A-Fa-f\s]+)>/g; let s;
+      while ((s = sre.exec(inner))) out += s[1] != null ? this._unescape(s[1]) : this._hexToStr(s[2]);
       out += ' ';
     }
     return out + '\n';
+  },
+
+  _hexToStr(hex) {
+    const h = hex.replace(/\s+/g, '');
+    let s = '';
+    for (let i = 0; i + 1 < h.length; i += 2) s += String.fromCharCode(parseInt(h.substr(i, 2), 16));
+    return s;
   },
 
   _unescape(s) {

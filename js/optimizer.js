@@ -53,6 +53,28 @@ const Optimizer = {
     // 额定容量（一充一放，计放电深度）
     let capacityKwh = eUse / dod;
 
+    // —— 需量管理：必须结合变压器容量与最大需量来配储能（削峰） ——
+    const pf = 0.9;                                  // 功率因数（缺省）
+    const peakKw = load.peakKw || Math.round(Math.max.apply(null, loadDay) * 1.3);
+    const transformerKVA = load.transformerKVA || 0;
+    const txKw = transformerKVA * pf;                // 变压器可带最大有功
+    let demandCut = peakKw * 0.15;                   // 默认削峰 15%
+    let txNote = '';
+    if (txKw > 0) {
+      if (peakKw > txKw * 0.85) {
+        // 需量接近变压器满载：削峰到 ~75% 容量，避免增容/超容
+        demandCut = Math.max(demandCut, peakKw - txKw * 0.75);
+        txNote = `；最大需量 ${Math.round(peakKw)}kW 接近变压器 ${transformerKVA}kVA(可带${Math.round(txKw)}kW)，按削峰至 75% 容量配置`;
+      } else {
+        txNote = `；变压器 ${transformerKVA}kVA（可带${Math.round(txKw)}kW），需量 ${Math.round(peakKw)}kW 余量充足`;
+      }
+    }
+    const powerDemand = Math.max(0, demandCut);      // 削峰所需功率
+    const capDemand = powerDemand * 2;               // 维持约 2 小时峰段
+    // 取套利与削峰两者更大者，确保不忽略变压器/需量约束
+    powerKw = Math.max(powerKw, powerDemand);
+    capacityKwh = Math.max(capacityKwh, capDemand);
+
     // 取整到合理工程规格
     capacityKwh = Math.max(0, Math.round(capacityKwh / 50) * 50);
     powerKw = Math.max(0, Math.round(powerKw / 25) * 25);
@@ -64,9 +86,9 @@ const Optimizer = {
     const hours = powerKw > 0 ? (capacityKwh / powerKw) : 0;
     const explain =
       `根据负荷曲线反算：高峰时段约 ${hPeak} 小时、峰段用电约 ${Math.round(ePeak).toLocaleString()} kWh，` +
-      `低谷可充约 ${hValley} 小时。\n按"谷充峰放、一充一放"测算，建议储能 ` +
+      `低谷可充约 ${hValley} 小时${txNote}。\n按"谷充峰放、一充一放 + 削峰"测算，建议储能 ` +
       `${capacityKwh.toLocaleString()} kWh / ${powerKw.toLocaleString()} kW（约 ${hours.toFixed(1)} 小时系统）。`;
-    return { capacityKwh, powerKw, ePeak, hPeak, hValley, explain };
+    return { capacityKwh, powerKw, ePeak, hPeak, hValley, peakKw, transformerKVA, explain };
   },
 
   /**

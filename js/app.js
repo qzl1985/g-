@@ -648,25 +648,51 @@ const App = {
         if (/\.pdf$/i.test(f.name)) {
           const ab = await f.arrayBuffer();
           const r = await PdfReader.extractText(ab);
-          if (r.text && r.text.replace(/\s/g, '').length > 10) {
-            fields = await this._extractBill(r.text);
-          } else {
-            note.textContent = 'PDF 无文字层（疑似扫描件/图片），请改用图片上传走视觉识别，或手工录入。';
+          const readable = r.text && r.text.replace(/\s/g, '').length > 10;
+          fields = readable ? await this._extractBill(r.text) : null;
+          // 文字层识别失败 → 尝试 PDF 首页渲染成图片，走大模型视觉识别（扫描件可用）
+          if (!this._hasBillData(fields)) {
+            try {
+              const img = await PdfReader.renderFirstPageImage(ab);
+              const obj = await Assistant.extractBillImage(img);
+              if (this._hasBillData(obj)) fields = obj;
+            } catch (e) { /* pdf.js 未加载或无视觉模型 */ }
+          }
+          if (!this._hasBillData(fields)) {
+            note.textContent = `「${f.name}」未能识别出电费单数据` +
+              (r.via === 'pdfjs' ? '（PDF 文字层无有效字段）' : '（疑似扫描件/图片型 PDF）') +
+              '。\n建议：①在「💬 AI 助手」配置【带视觉】的大模型后重试；②或把电费单【截图为图片】上传；③或在下方【结构化录入】手工填写。';
             continue;
           }
-        } else if (/^image\//.test(f.type) || /\.(png|jpe?g|webp)$/i.test(f.name)) {
+        } else if (/^image\//.test(f.type) || /\.(png|jpe?g|webp|bmp)$/i.test(f.name)) {
           const dataUrl = await this._fileToDataUrl(f);
-          const obj = await Assistant.extractBillImage(dataUrl);
-          if (!obj) { note.textContent = '图片识别需在「AI 助手」里配置带视觉的大模型；也可手工录入。'; continue; }
+          let obj = null;
+          try { obj = await Assistant.extractBillImage(dataUrl); } catch (e) { obj = null; }
+          if (!this._hasBillData(obj)) {
+            note.textContent = '图片识别需先在「💬 AI 助手」里配置一个【带视觉】的大模型 API（如 GPT-4o、通义千问-VL）。未配置时请用【结构化录入】手工填写。';
+            continue;
+          }
           fields = obj;
         } else { // 文本文件
           const text = await f.text();
           fields = await this._extractBill(text);
+          if (!this._hasBillData(fields)) { note.textContent = `「${f.name}」未识别到电费单数据，请改用结构化录入。`; continue; }
         }
-        if (fields) { this.state.bills.push(BillParser.fromFields(fields)); added++; }
+        if (this._hasBillData(fields)) { this.state.bills.push(BillParser.fromFields(fields)); added++; }
       } catch (err) { note.textContent = '识别出错：' + (err.message || err); }
     }
-    if (added) { note.textContent = `已识别并添加 ${added} 张电费单`; this.renderBillList(); }
+    if (added) {
+      note.textContent = `已识别并添加 ${added} 张电费单，已自动校准【2·用电与电价】`;
+      this.renderBillList();
+      this.applyBillCalibration(false);   // 自动把电费单口径写入第2节
+    }
+  },
+
+  // 判断抽取结果是否含有效电费单数据
+  _hasBillData(f) {
+    if (!f) return false;
+    const keys = ['total', 'maxDemand', 'peak', 'flat', 'valley', 'sharp', 'transformerKVA', 'totalFee'];
+    return keys.some(k => { const v = parseFloat(f[k]); return isFinite(v) && v > 0; });
   },
 
   async parseBillPaste() {
@@ -675,9 +701,17 @@ const App = {
     const note = document.getElementById('billExtractNote');
     note.textContent = '识别中…';
     const fields = await this._extractBill(text);
-    this.fillBillForm(BillParser.fromFields(fields));
+    const bill = BillParser.fromFields(fields);
+    this.fillBillForm(bill);
     document.getElementById('billFormWrap').open = true;
-    note.textContent = '已填入下方表单，请核对后「添加这张单」。';
+    if (this._hasBillData(fields)) {
+      this.state.bills.push(bill);
+      this.renderBillList();
+      note.textContent = '已识别并自动校准【2·用电与电价】，可在下方表单核对修改。';
+      this.applyBillCalibration(false);
+    } else {
+      note.textContent = '未能自动识别，请在下方【结构化录入】补全后「添加这张单」。';
+    }
   },
 
   // 文本抽取：优先大模型，失败回退规则
@@ -721,6 +755,7 @@ const App = {
     this.renderBillList();
     ['bf_month','bf_sharp','bf_peak','bf_flat','bf_valley','bf_total','bf_maxDemand','bf_transformerKVA','bf_basicFee','bf_totalFee']
       .forEach(id => { document.getElementById(id).value = ''; });
+    this.applyBillCalibration(false);   // 录入后立即校准第2节
   },
 
   renderBillList() {
@@ -735,11 +770,15 @@ const App = {
     }));
   },
 
-  applyBillCalibration() {
-    // 表单里若有未添加的内容，先纳入
-    const g = id => document.getElementById(id).value;
-    if (g('bf_total') || g('bf_maxDemand')) this.addBillFromForm();
-    if (!this.state.bills.length) { alert('请先识别或录入至少一张电费单'); return; }
+  applyBillCalibration(run) {
+    if (run === undefined) run = true;
+    if (!this.state.bills.length) {
+      // 按钮触发但还没添加：尝试把表单内容纳入
+      const g = id => document.getElementById(id).value;
+      if (run && (g('bf_total') || g('bf_maxDemand'))) { this.addBillFromForm(); return; }
+      if (run) alert('请先识别或录入至少一张电费单');
+      return;
+    }
 
     const loadCtx = {
       monthly: this.state.load.monthly.slice(),
@@ -771,7 +810,7 @@ const App = {
     const noteEl = document.getElementById('billNote');
     noteEl.textContent = '电费单校准（计费真值）：\n· ' + r.notes.join('\n· ');
     noteEl.classList.remove('hidden');
-    this.run();
+    if (run) this.run();
   },
 
   showBillSample() {
