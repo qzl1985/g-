@@ -122,15 +122,29 @@ const PdfReader = {
     // [(a)-12(b)<hex>] TJ
     const TJ = /\[((?:[^\[\]])*)\]\s*TJ/g;
     let m;
-    while ((m = tj.exec(content))) out += this._unescape(m[1]);
-    while ((m = tjHex.exec(content))) out += this._hexToStr(m[1]);
+    while ((m = tj.exec(content))) out += this._decodeStr(m[1]);
+    while ((m = tjHex.exec(content))) out += this._decodeStr(this._hexToStr(m[1]));
     while ((m = TJ.exec(content))) {
       const inner = m[1];
       const sre = /\(((?:\\.|[^\\()])*)\)|<([0-9A-Fa-f\s]+)>/g; let s;
-      while ((s = sre.exec(inner))) out += s[1] != null ? this._unescape(s[1]) : this._hexToStr(s[2]);
+      while ((s = sre.exec(inner))) out += s[1] != null ? this._decodeStr(s[1]) : this._decodeStr(this._hexToStr(s[2]));
       out += ' ';
     }
     return out + '\n';
+  },
+
+  // 解码一个 PDF 文本串：偶数位出现 NUL → UTF-16BE（数字/中文均为真 Unicode）；否则 latin1 反转义
+  _decodeStr(s) {
+    if (s.length >= 2 && s.length % 2 === 0) {
+      let utf16 = false;
+      for (let i = 0; i < s.length; i += 2) { if (s.charCodeAt(i) === 0) { utf16 = true; break; } }
+      if (utf16) {
+        let out = '';
+        for (let i = 0; i + 1 < s.length; i += 2) out += String.fromCharCode(s.charCodeAt(i) * 256 + s.charCodeAt(i + 1));
+        return out;
+      }
+    }
+    return this._unescape(s);
   },
 
   _hexToStr(hex) {

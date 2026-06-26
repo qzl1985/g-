@@ -38,12 +38,16 @@ const LoadParser = {
 
     let kind = opts.valueKind || this._detectKind(header, valueCol);
 
+    // 单位换算（兆瓦时→kWh 等）
+    const unitScale = opts.unitScale || this._unitScale(header, valueCol);
+
     // 解析每行：数值 + 时间（其余列拼成时间串解析）
     const recs = [];
     for (const r of dataRows) {
       const raw = (r[valueCol] || '').replace(/[,\s]/g, '');
-      const val = parseFloat(raw);
+      let val = parseFloat(raw);
       if (!isFinite(val)) continue;
+      val *= unitScale;
       const tsStr = r.filter((_, i) => i !== valueCol).join(' ');
       const dt = this._parseDT(tsStr);
       recs.push({ val, h: dt.h, mi: dt.mi, mo: dt.mo, hasDate: dt.hasDate });
@@ -90,14 +94,16 @@ const LoadParser = {
 
     const hourly = hourSum.map((s, i) => (hourCnt[i] ? s / hourCnt[i] : 0));
 
+    const unitNote = unitScale === 1000 ? '（兆瓦时 MWh 已×1000 换算）'
+                   : unitScale === 10000 ? '（万度 已×10000 换算）' : '';
     return {
       ok: true,
-      interval, kind, valueCol, header,
+      interval, kind, valueCol, header, unitScale,
       count: recs.length,
       annualKwh, monthly,
       peakKw: Math.round(peakP),
       hourly,
-      note: `识别成功：${interval} 分钟间隔，共 ${recs.length} 条；数值判定为${kind === 'power' ? '有功功率 (kW)' : '每区间电量 (kWh)'}；${spanNote}。` +
+      note: `识别成功：${interval} 分钟间隔，共 ${recs.length} 条；数值判定为${kind === 'power' ? '有功功率 (kW)' : '每区间电量 (kWh)'}${unitNote}；${spanNote}。` +
             `年用电约 ${(annualKwh / 1e4).toFixed(1)} 万 kWh，最大需量约 ${Math.round(peakP)} kW。`
     };
   },
@@ -133,15 +139,19 @@ const LoadParser = {
   },
 
   _detectValueCol(rows, header, ncol) {
-    // 优先表头关键字
+    // 元数据列（日期/时间/编号/名称/序号/用户…）不能当数值列
+    const isMeta = h => /日期|时间|编号|编码|名称|序号|户名|用户|地址|相别|^no\.?$|date|time|name/i.test(String(h || ''));
+    // 优先表头关键字（排除元数据列）
     if (header) {
       for (let i = 0; i < header.length; i++) {
-        if (/kwh|电量|用电|有功|功率|负荷|kw|power|load/i.test(header[i])) return i;
+        if (isMeta(header[i])) continue;
+        if (/电量|用电量|功率|负荷|有功|兆瓦时|mwh|kwh|kw|power|load/i.test(header[i])) return i;
       }
     }
-    // 否则取"数值多且方差大"的列（时间/日期列含 : 或 - 会被 parseFloat 排除或方差极小）
+    // 否则取"数值多且方差大"的列（跳过元数据列；时间/日期含 : 或 - 会被 parseFloat 排除或方差极小）
     let best = -1, bestScore = -1;
     for (let c = 0; c < ncol; c++) {
+      if (header && isMeta(header[c])) continue;
       const nums = [];
       for (const r of rows.slice(0, 300)) {
         const v = parseFloat((r[c] || '').replace(/[,\s]/g, ''));
@@ -153,6 +163,14 @@ const LoadParser = {
       if (score > bestScore) { bestScore = score; best = c; }
     }
     return best;
+  },
+
+  // 单位换算系数：兆瓦时(MWh)→×1000，万度/万kWh→×10000
+  _unitScale(header, col) {
+    const h = (header && header[col]) ? String(header[col]) : '';
+    if (/兆瓦时|mwh|兆瓦/i.test(h)) return 1000;
+    if (/万\s*(度|kwh|千瓦时)/i.test(h)) return 10000;
+    return 1;
   },
 
   _detectKind(header, col) {
@@ -168,9 +186,14 @@ const LoadParser = {
     const dm = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
     const tm = s.match(/(\d{1,2}):(\d{2})/);
     if (dm) { out.hasDate = true; out.mo = Math.min(11, Math.max(0, parseInt(dm[2], 10) - 1)); }
+    else {
+      // 紧凑日期 YYYYMMDD（如南网 20250401）
+      const cm = s.match(/(?:^|\D)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:\D|$)/);
+      if (cm) { out.hasDate = true; out.mo = parseInt(cm[2], 10) - 1; }
+    }
     if (tm) { out.h = Math.min(23, parseInt(tm[1], 10)); out.mi = parseInt(tm[2], 10); }
     // Excel 序列日期（数值，如 45292.5104）：约 1954–2119 年区间
-    if (!dm && !tm) {
+    if (!dm && !out.hasDate && !tm) {
       const num = parseFloat(String(s).trim());
       if (isFinite(num) && num > 20000 && num < 80000) {
         const d = new Date(Date.UTC(1899, 11, 30) + Math.round(num * 86400) * 1000);

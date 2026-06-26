@@ -16,6 +16,7 @@
 const BillParser = {
   /** 中文电费单纯文本 → 结构化（尽力而为，识别失败的字段留空） */
   parseText(text) {
+    if (this._isGuangwang(text)) return this.parseGuangwang(text);
     const t = String(text || '').replace(/，/g, ',').replace(/：/g, ':');
     const num = (re) => {
       const m = t.match(re);
@@ -56,6 +57,74 @@ const BillParser = {
     bill.powerFactor = pf;
 
     return this.normalize(bill);
+  },
+
+  // 是否南网版式（英文锚点对乱码/干净文本都有效）
+  _isGuangwang(text) {
+    return /南方电网|Electricity Bill Information|Electricity Consumption Details|电度电费|输配电费/.test(String(text || ''));
+  },
+
+  /**
+   * 南网电费单解析（规则）。主输入为 pdf.js 干净文本（按中文标签锚定）；
+   * 标签缺失/乱码时退化为"重复电量值 + 容量×单价"数字兜底。
+   */
+  parseGuangwang(text) {
+    let t = String(text || '').replace(/[，（）：]/g, c => ({ '，': ',', '（': '(', '）': ')', '：': ':' }[c]));
+    // PDF 零依赖提取常把数字拆成"7 8 5 4 0 . 0 0"，合并空格分隔的单数字串（对干净文本无副作用）
+    t = t.replace(/\d(?:\s+\d){1,}(?:\s*\.\s*\d(?:\s+\d)*)?/g, s => s.replace(/\s+/g, ''));
+    const grab = re => { const m = t.match(re); return m ? parseFloat(m[1].replace(/,/g, '')) : null; };
+    const seg = name => grab(new RegExp('电度电费\\s*\\(\\s*' + name + '\\s*\\)[^\\d-]*([\\d,]+\\.\\d{2})'));
+
+    let energy = { sharp: seg('尖'), peak: seg('峰'), flat: seg('平'), valley: seg('谷'), total: null };
+    let transformerKVA = grab(/受电容量[^\d]*([\d,]+(?:\.\d+)?)/) || grab(/容量电费[^\d-]*([\d,]+\.\d{2})/);
+    let maxDemand = grab(/需量电费[^\d-]*([\d,]+\.\d{2})/) || grab(/最大需量[^\d]*([\d,]+(?:\.\d+)?)/);
+    const totalFee = grab(/(?:应收电费合计|电费合计|合计电费|本月应交电费|总电费)[^\d-]*([\d,]+\.\d{2})/);
+
+    let month = null;
+    const dm = t.match(/(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])/);
+    if (dm) month = parseInt(dm[2], 10);
+
+    // 计费方式：有容量电费且无需量 → 按容量；有需量电费 → 按需量
+    let basicFeeBasis = null;
+    if (/容量电费/.test(t) && !maxDemand) basicFeeBasis = 'capacity';
+    else if (maxDemand || /需量电费/.test(t)) basicFeeBasis = 'demand';
+
+    // 数字兜底：分时电量（4 个重复电量值，尖默认 0）
+    if (!(energy.peak || energy.flat || energy.valley)) {
+      const seg2 = this._gwNumericSegments(t);
+      if (seg2) energy = Object.assign(energy, seg2);
+    }
+    if (!transformerKVA) transformerKVA = this._gwCapacity(t);
+
+    const bill = this.normalize({ month, energy, maxDemand, transformerKVA, basicFee: null, energyFee: null, totalFee, powerFactor: null });
+    bill.basicFeeBasis = basicFeeBasis;
+    bill.source = 'guangwang';
+    return bill;
+  },
+
+  // 数字兜底：取重复≥3 次的非零电量值（按首次出现）→ 峰/平/谷；尖默认 0
+  _gwNumericSegments(t) {
+    const re = /\b(\d{3,7})\.00\b/g; let m;
+    const order = [], cnt = {};
+    while ((m = re.exec(t))) {
+      const v = parseInt(m[1], 10);
+      if (v <= 0) continue;
+      if (cnt[v] === undefined) { cnt[v] = 0; order.push(v); }
+      cnt[v]++;
+    }
+    const rep = order.filter(v => cnt[v] >= 3);
+    if (rep.length >= 3) return { sharp: 0, peak: rep[0], flat: rep[1], valley: rep[2] };
+    return null;
+  },
+
+  // 数字兜底：容量×单价=电费 → 取容量(kVA)
+  _gwCapacity(t) {
+    const re = /(\d{3,6})\.00\s+(\d{1,3}\.\d{2})\b/g; let m;
+    while ((m = re.exec(t))) {
+      const cap = parseInt(m[1], 10), rate = parseFloat(m[2]);
+      if (cap >= 100 && rate >= 10 && rate <= 60 && cap * rate > 10000) return cap;
+    }
+    return null;
   },
 
   /** 规整：补总电量、综合电价、可信度 */
@@ -208,8 +277,14 @@ const BillParser = {
       notes.push(`已按电费单设定最大需量 ${Math.round(peakKw)} kW`);
     }
 
-    // 基本电费计费方式：若同时有基本电费与最大需量，判断按需量还是按容量
+    // 基本电费计费方式
     let basicFeeMode = (load && load.basicFeeMode) || 'auto';
+    // 优先采用电费单明确的计费方式（如南网"容量电费/需量电费"）
+    const basisBill = bills.find(b => b.basicFeeBasis);
+    if (basisBill) {
+      basicFeeMode = basisBill.basicFeeBasis;
+      notes.push(`按电费单计费方式：${basicFeeMode === 'capacity' ? '按变压器容量' : '按最大需量'}`);
+    }
     const b0 = bills.find(b => b.basicFee);
     if (b0 && b0.basicFee) {
       if (b0.maxDemand && transformerKVA) {

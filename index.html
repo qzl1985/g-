@@ -56,6 +56,25 @@
   <main>
     <!-- ============ 方案测算 ============ -->
     <section id="tab-calc" class="tab-panel active">
+      <div class="card nanwang-card" id="nwCard">
+        <h2>🔌 南网一键测算 <small>（上传"负荷表 + 电费单"，自动结合校准并出结果）</small></h2>
+        <p class="hint">适配中国南方电网导出：负荷表（逐时 .xlsx，兆瓦时自动换算）+ 电费单（.pdf，自动取分时电量、变压器容量、计费方式）。以电费单为计费真值校准负荷表，直接出测算。</p>
+        <div class="field-row">
+          <div class="field">
+            <label>① 负荷表 <small>南网导出 .xlsx / .csv</small></label>
+            <input type="file" id="nwLoadFile" accept=".xlsx,.csv,.txt" />
+          </div>
+          <div class="field">
+            <label>② 电费单 <small>.pdf / 图片</small></label>
+            <input type="file" id="nwBillFile" accept=".pdf,image/*,.csv,.xlsx" />
+          </div>
+        </div>
+        <div class="actions">
+          <button class="btn-primary" id="nwRunBtn">⚡ 一键结合测算</button>
+        </div>
+        <div class="explain hidden" id="nwNote"></div>
+      </div>
+
       <div class="grid-2">
         <div class="card">
           <h2>1 · 选择设备组合</h2>

@@ -218,6 +218,9 @@ td.pos { color: var(--green); } td.neg { color: var(--red); }
 .mini-x:hover { color: var(--red); }
 #compareTable th, #compareTable td { text-align: left; }
 
+/* ---------- 南网一键 ---------- */
+.nanwang-card { border: 1.5px solid var(--primary); background: linear-gradient(135deg, rgba(59,130,246,.12), rgba(6,182,212,.06)); }
+
 /* ---------- 电费单 ---------- */
 .bill-list { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .bill-item { display: flex; justify-content: space-between; align-items: center; gap: 10px;

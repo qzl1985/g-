@@ -249,6 +249,9 @@ const App = {
     document.getElementById('billTemplate').addEventListener('click', () => this.downloadBillTemplate());
     document.getElementById('loadTemplate').addEventListener('click', () => this.downloadLoadTemplate());
 
+    // 南网一键
+    document.getElementById('nwRunBtn').addEventListener('click', () => this.runNanwang());
+
     // 负荷表导入
     document.getElementById('loadFile').addEventListener('change', (e) => this.onLoadFile(e));
     document.getElementById('loadPaste').addEventListener('input', () => { this._importedRows = null; this._importedNames = null; });
@@ -635,6 +638,70 @@ const App = {
     box.textContent = sz.explain;
     box.classList.remove('hidden');
     return sz;
+  },
+
+  // ============ 南网一键测算（负荷表 + 电费单 → 结合校准 → 出结果） ============
+  async runNanwang() {
+    const lf = (document.getElementById('nwLoadFile').files || [])[0];
+    const bf = (document.getElementById('nwBillFile').files || [])[0];
+    const note = document.getElementById('nwNote');
+    if (!lf && !bf) { alert('请至少选择负荷表或电费单'); return; }
+    note.classList.remove('hidden');
+    note.textContent = '正在解析…';
+    const msgs = [];
+    try {
+      // ① 负荷表（南网逐时 / 兆瓦时 / YYYYMMDD 已自动适配）
+      if (lf) {
+        const rows = await this.readFileToRows(lf);
+        const res = LoadParser.parseRows(rows);
+        if (res.ok) {
+          this.state.load.monthly = res.monthly.map(v => Math.round(v));
+          const mx = Math.max.apply(null, res.hourly) || 1;
+          this.state.load.hourly = res.hourly.map(v => +(v / mx).toFixed(3));
+          this.state.load.dataTier = 'hourly';
+          this.state.load.measuredPeakKw = res.peakKw;
+          this.state.load.measuredAnnual = res.annualKwh;
+          document.getElementById('dataTier').value = 'hourly';
+          document.getElementById('peakKw').value = res.peakKw;
+          this.renderMonths(); this.renderHourly(); this.updateLoadTierUI();
+          msgs.push('负荷表：' + res.note);
+        } else { msgs.push('负荷表识别失败：' + res.error); }
+      }
+      // ② 电费单（南网规则 → 大模型/视觉兜底）
+      if (bf) {
+        let fields = null;
+        if (/\.pdf$/i.test(bf.name)) {
+          const ab = await bf.arrayBuffer();
+          const r = await PdfReader.extractText(ab);
+          if (r.text && r.text.replace(/\s/g, '').length > 10) fields = await this._extractBill(r.text);
+          if (!this._hasBillData(fields)) {
+            try { const img = await PdfReader.renderFirstPageImage(ab); const o = await Assistant.extractBillImage(img); if (this._hasBillData(o)) fields = o; } catch (e) {}
+          }
+        } else if (/^image\//.test(bf.type) || /\.(png|jpe?g|webp)$/i.test(bf.name)) {
+          const u = await this._fileToDataUrl(bf);
+          try { fields = await Assistant.extractBillImage(u); } catch (e) {}
+        } else {
+          const rows = await this.readFileToRows(bf);
+          const list = BillParser.parseTable(rows);
+          if (list.length) { list.forEach(b => this.state.bills.push(b)); }
+          else fields = await this._extractBill(rows.map(r => r.join(' ')).join('\n'));
+        }
+        if (this._hasBillData(fields)) this.state.bills.push(BillParser.fromFields(fields));
+        if (!this.state.bills.length) msgs.push('电费单未能自动识别（可在下方"🧾 电费单校准"用图片视觉或手工录入）。');
+      }
+      this.renderBillList();
+      // ③ 结合校准并测算
+      if (this.state.bills.length) {
+        this.applyBillCalibration(true);   // 内部会 run()
+        msgs.push('已结合电费单完成校准与测算，详见下方结果。');
+      } else if (lf) {
+        this.run();
+        msgs.push('已按负荷表测算（无电费单，建议补电费单以校准分时电量与变压器容量）。');
+      }
+      note.textContent = '南网一键：\n· ' + msgs.join('\n· ');
+    } catch (e) {
+      note.textContent = '处理出错：' + (e.message || e);
+    }
   },
 
   // ============ 电费单校准（PDF/图片/文本/录入 · 计费真值） ============

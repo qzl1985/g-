@@ -69,13 +69,14 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
 - `js/loadparser.js` — `LoadParser.parse(text, opts)` / `parseRows(rows, opts)`:
   zero-dep parser for utility 15-min (or 5/10/30/60-min) load tables (CSV,
   pasted, or rows from xlsx). Auto-detects delimiter, header, timestamp/value
-  columns, interval, kW-vs-kWh, and Excel serial dates. Returns annualKwh,
-  monthly[12], real peak demand (kW), and a 24h average load shape — fed into
-  the form (dataTier `hourly`). Multiple files are concatenated into one
-  `parseRows` call (aggregated by date).
+  columns, interval, kW-vs-kWh, **compact YYYYMMDD dates**, and **MWh/万度 units
+  (×1000 / ×10000)**; value-col detection excludes 日期/时间/编号 columns
+  (南网 `用电日期` bug). Returns annualKwh, monthly[12], real peak demand (kW),
+  and a 24h average load shape (dataTier `hourly`).
 - `js/billparser.js` — `BillParser`: Chinese 电费单 parsing (`parseText` regex,
-  `fromFields` for LLM/manual input) + `calibrate(bills, load)` — **bill is the
-  billing ground truth**: sets monthly kWh, TOU shares (dataTier `tou`), max
+  `parseGuangwang` for 南网 编号式电费信息 / 容量电费, `parseTable` for CSV/xlsx
+  bill template, `fromFields` for LLM/manual) + `calibrate(bills, load)` —
+  **bill is the billing ground truth**: sets monthly kWh, TOU shares (dataTier `tou`), max
   demand, transformer kVA, basic-fee basis from bills; cross-checks against the
   load table's measured peak/annual and warns on >15%/10% discrepancy.
 - `js/pdfreader.js` — `PdfReader.extractText(arrayBuffer)` → `Promise<{text,via}>`:
