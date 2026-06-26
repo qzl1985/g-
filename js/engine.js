@@ -330,6 +330,7 @@ const Engine = {
     const energyByYear = [];
     const revenueByYear = [];        // 营业收入(电费节省+上网+充电+柴发调峰)
     const replacementByYear = [];    // 设备更换现金流出(储能等)
+    const storeThroughputByYear = [];// 储能逐年放电量(用于 SOH/LCOS)
     let totalPvGen = 0, totalCarbonCut = 0, totalStoreThroughput = 0;
 
     // 充电桩、柴发年值（首年，后续保持稳定）
@@ -400,6 +401,7 @@ const Engine = {
       // 供电量（用于 LCOE）：自用光伏+储能放电+负荷被满足部分
       energyByYear.push(yearPvSelf + yearThroughput);
 
+      storeThroughputByYear.push(yearThroughput);
       totalPvGen += (yearPvSelf + yearPvExport);
       totalStoreThroughput += yearThroughput;
       if (sel.pv) totalCarbonCut += (yearPvSelf + yearPvExport) * region.carbonFactor / 1000;
@@ -420,6 +422,7 @@ const Engine = {
       baselineAnnualCost,
       annualNet, omByYear,
       revenueByYear, replacementByYear, generationByYear: energyByYear,
+      storeThroughputByYear,
       finance: fin,
       env: {
         carbonCut: totalCarbonCut,    // tCO2 全周期

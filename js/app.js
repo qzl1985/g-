@@ -1196,6 +1196,26 @@ const App = {
       genBox.innerHTML = '<div class="hint">本方案未含光伏。</div>';
     }
 
+    // 储能精细化（SOH/EFC/LCOS/更换）
+    const cfg = this.state.lastCfg;
+    if (cfg && cfg.selected.storage && typeof StorageModel !== 'undefined' && result.storeThroughputByYear) {
+      const st = cfg.storage;
+      const sm = StorageModel.evaluate({
+        capacityKwh: st.capacityKwh, powerKw: st.powerKw, dod: st.dod, etaRt: st.efficiency,
+        capexPerWh: st.capexPerWh, omPerKwhYear: st.omPerKwhYear,
+        throughputByYear: result.storeThroughputByYear, years: result.years, discountRate: 0.06
+      });
+      kpi([
+        { label: '年均等效循环', value: sm.efcAvg, unit: '次/年' },
+        { label: '末年 SOH', value: (sm.endSoh * 100).toFixed(1) + '%', cls: sm.endSoh >= 0.8 ? 'good' : 'warn' },
+        { label: '储能更换年份', value: sm.replaceYears.length ? sm.replaceYears.join('/') : '全周期免换', unit: sm.replaceYears.length ? '年' : '' },
+        { label: '平准储能成本 LCOS', value: sm.lcos && isFinite(sm.lcos) ? sm.lcos.toFixed(3) : '—', unit: cur + '/kWh' }
+      ], 'engStorageKpi');
+      document.getElementById('engStorageWrap').classList.remove('hidden');
+    } else {
+      document.getElementById('engStorageWrap').classList.add('hidden');
+    }
+
     const I = f2.indicators;
     kpi([
       { label: '总投资(动态)', value: this.money(f2.totalInvestment, cur) },
