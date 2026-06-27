@@ -618,10 +618,20 @@ const App = {
         valley: (parseFloat(g('touValley').value) || 0) / 100
       },
       hourly: this.state.load.hourly.slice(),
+      monthlyHourly: this.state.load.monthlyHourly || null,
+      weekdayShape: this.state.load.weekdayShape || null,
+      weekendShape: this.state.load.weekendShape || null,
       transformerKVA: parseFloat(g('transformerKVA').value) || 0,
       peakKw: parseFloat(g('peakKw').value) || 0,
       basicFeeMode: g('basicFeeMode').value
     };
+  },
+
+  // 导入解析结果中保存"分月×小时/工作日/周末"形状（供工程版 8760 使用）
+  _storeShapes(res) {
+    if (res.monthlyHourly) this.state.load.monthlyHourly = res.monthlyHourly;
+    if (res.weekdayShape) this.state.load.weekdayShape = res.weekdayShape;
+    if (res.weekendShape) this.state.load.weekendShape = res.weekendShape;
   },
 
   // 储能容量反算（auto=true 时强制提示，run 内静默调用）
@@ -661,10 +671,12 @@ const App = {
           this.state.load.dataTier = 'hourly';
           this.state.load.measuredPeakKw = res.peakKw;
           this.state.load.measuredAnnual = res.annualKwh;
+          this._storeShapes(res);
           document.getElementById('dataTier').value = 'hourly';
           document.getElementById('peakKw').value = res.peakKw;
+          document.getElementById('modeSelect').value = 'engineering';   // 有真实逐时数据→用 8760 工程版
           this.renderMonths(); this.renderHourly(); this.updateLoadTierUI();
-          msgs.push('负荷表：' + res.note);
+          msgs.push('负荷表：' + res.note + '（已启用 8760 逐时工程版）');
         } else { msgs.push('负荷表识别失败：' + res.error); }
       }
       // ② 电费单（南网规则 → 大模型/视觉兜底）
@@ -1001,6 +1013,7 @@ const App = {
     this.state.load.dataTier = 'hourly';
     this.state.load.measuredPeakKw = res.peakKw;        // 供电费单交叉校验
     this.state.load.measuredAnnual = res.annualKwh;
+    this._storeShapes(res);
     document.getElementById('dataTier').value = 'hourly';
     document.getElementById('peakKw').value = res.peakKw;
     this.renderMonths();
@@ -1106,6 +1119,40 @@ const App = {
     this.drawCashflow(r);
     this.drawCapex(r);
     this.renderCashTable(r);
+    this.drawLDC(r);
+  },
+
+  // 负荷持续曲线（工程版 8760）
+  drawLDC(r) {
+    const card = document.getElementById('ldcCard');
+    const ldc = r.load && r.load.loadDurationCurve;
+    if (!ldc || !ldc.length) { card.classList.add('hidden'); return; }
+    card.classList.remove('hidden');
+    document.getElementById('ldcNote').textContent =
+      `（8760 逐时仿真 · 真实峰值 ${r.load.truePeakKw} kW · 谷值 ${ldc[ldc.length - 1]} kW）`;
+    const cv = document.getElementById('ldcChart');
+    const ctx = cv.getContext('2d');
+    const W = cv.width = cv.clientWidth, H = cv.height;
+    ctx.clearRect(0, 0, W, H);
+    const pad = { l: 52, r: 12, t: 12, b: 22 };
+    const max = Math.max.apply(null, ldc) || 1;
+    const x = i => pad.l + (W - pad.l - pad.r) * i / (ldc.length - 1);
+    const y = v => pad.t + (H - pad.t - pad.b) * (1 - v / max);
+    // y 轴
+    ctx.strokeStyle = '#3a4a70'; ctx.lineWidth = 1; ctx.fillStyle = '#93a1c0'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    [max, max / 2, 0].forEach(v => { ctx.fillText(Math.round(v) + 'kW', pad.l - 6, y(v) + 3); ctx.beginPath(); ctx.moveTo(pad.l, y(v)); ctx.lineTo(W - pad.r, y(v)); ctx.globalAlpha = .25; ctx.stroke(); ctx.globalAlpha = 1; });
+    // 面积
+    const grad = ctx.createLinearGradient(0, pad.t, 0, H);
+    grad.addColorStop(0, 'rgba(245,158,11,.35)'); grad.addColorStop(1, 'rgba(245,158,11,0)');
+    ctx.beginPath(); ctx.moveTo(x(0), y(0));
+    ldc.forEach((v, i) => ctx.lineTo(x(i), y(v)));
+    ctx.lineTo(x(ldc.length - 1), y(0)); ctx.closePath(); ctx.fillStyle = grad; ctx.fill();
+    // 线
+    ctx.beginPath(); ldc.forEach((v, i) => i === 0 ? ctx.moveTo(x(i), y(v)) : ctx.lineTo(x(i), y(v)));
+    ctx.strokeStyle = '#f59e0b'; ctx.lineWidth = 2; ctx.stroke();
+    // x 标签
+    ctx.fillStyle = '#93a1c0'; ctx.textAlign = 'center';
+    ['0%', '25%', '50%', '75%', '100%'].forEach((t, i) => ctx.fillText(t, pad.l + (W - pad.l - pad.r) * i / 4, H - 6));
   },
 
   renderCashTable(r) {

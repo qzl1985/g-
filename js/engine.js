@@ -27,7 +27,12 @@ const Engine = {
    * @param load 负荷配置对象 {profile, dataTier, tou:{sharp,peak,flat,valley}, hourly:[24]}
    * @param region 用于读取分时时段归属
    */
-  buildLoadDay(dailyKwh, load, region) {
+  buildLoadDay(dailyKwh, load, region, shapeOverride) {
+    // 8760 逐时：按"该月真实/工作日/周末"形状注入
+    if (shapeOverride && shapeOverride.length === 24) {
+      const sum = shapeOverride.reduce((a, b) => a + (+b || 0), 0) || 1;
+      return shapeOverride.map(s => ((+s || 0) / sum) * dailyKwh);
+    }
     const tier = (load && load.dataTier) || 'template';
 
     // 档3：逐时负荷表
@@ -290,24 +295,61 @@ const Engine = {
 
     // 代表日负荷（用于峰值估算）
     const repLoadDay = this.buildLoadDay(annualKwh / 365, load, region);
-    const peakKw = load.peakKw || Math.round(Math.max.apply(null, repLoadDay) * 1.3) || 1;
+    let peakKw = load.peakKw || Math.round(Math.max.apply(null, repLoadDay) * 1.3) || 1;
 
-    // 月度迭代器：专业版 12 个月分别建负荷/光伏；简化版 1 个代表日×365
+    // 迭代器：simplified=1代表日×365；professional=12月代表日；engineering=365日逐时(工作日/周末+分月真实形状)
     const months = [];
-    if (mode === 'professional') {
+    const shapeFor = (m, weekend) => {
+      if (weekend && load.weekendShape) return load.weekendShape;
+      if (!weekend && load.weekdayShape && load.monthlyHourly && load.monthlyHourly[m]) {
+        // 用该月形状的日内分布、工作日量级（量级在归一化后无关，直接用月形状）
+        return load.monthlyHourly[m];
+      }
+      if (load.monthlyHourly && load.monthlyHourly[m]) return load.monthlyHourly[m];
+      return null;
+    };
+    if (mode === 'engineering') {
+      let doy = 0;
+      for (let m = 0; m < 12; m++) {
+        const dim = this._daysInMonth(m);
+        const dailyKwh = (monthly ? monthly[m] : annualKwh / 12) / dim;
+        for (let day = 1; day <= dim; day++) {
+          const dow = (doy + 2) % 7;                 // 确定性星期（2025-01-01≈周三起，近似）
+          const weekend = (dow === 0 || dow === 6);
+          months.push({ m, dayCount: 1, dailyKwh, monthFactor: MONTHLY_IRRADIANCE[m], weekend, shape: shapeFor(m, weekend) });
+          doy++;
+        }
+      }
+    } else if (mode === 'professional') {
       for (let m = 0; m < 12; m++) {
         const dc = this._daysInMonth(m);
         const dailyKwh = monthly ? (monthly[m] / dc) : (annualKwh / 365);
-        months.push({ m, dayCount: dc, dailyKwh, monthFactor: MONTHLY_IRRADIANCE[m] });
+        months.push({ m, dayCount: dc, dailyKwh, monthFactor: MONTHLY_IRRADIANCE[m], shape: shapeFor(m, false) });
       }
     } else {
       months.push({ m: -1, dayCount: 365, dailyKwh: annualKwh / 365, monthFactor: 1 });
     }
 
+    // 8760 负荷序列(逐时仿真)：真实峰值 + 负荷持续曲线 LDC
+    let truePeakKw = null, loadDurationCurve = null;
+    if (mode === 'engineering') {
+      const series = [];
+      months.forEach(mo => {
+        const ld = this.buildLoadDay(mo.dailyKwh, load, region, mo.shape);
+        for (let h = 0; h < 24; h++) series.push(ld[h]);
+      });
+      truePeakKw = Math.round(Math.max.apply(null, series));
+      const sorted = series.slice().sort((a, b) => b - a);
+      const N = 240;                                  // 下采样到 240 点用于绘图
+      loadDurationCurve = [];
+      for (let i = 0; i < N; i++) loadDurationCurve.push(Math.round(sorted[Math.floor(i * (sorted.length - 1) / (N - 1))]));
+      if (!load.peakKw && truePeakKw) peakKw = truePeakKw;   // 工程版用 8760 真实峰值
+    }
+
     // ---------- 基准能耗成本（无任何投资·纯电网） ----------
     let baselineEnergyCost = 0;
     months.forEach(mo => {
-      const ld = this.buildLoadDay(mo.dailyKwh, load, region);
+      const ld = this.buildLoadDay(mo.dailyKwh, load, region, mo.shape);
       let dayCost = 0;
       for (let h = 0; h < 24; h++) dayCost += ld[h] * this.priceAt(region, h).price;
       baselineEnergyCost += dayCost * mo.dayCount;
@@ -354,7 +396,7 @@ const Engine = {
       let yearGridCost = 0, yearExport = 0, yearPvSelf = 0, yearPvExport = 0, yearThroughput = 0;
 
       months.forEach(mo => {
-        const loadDay = this.buildLoadDay(mo.dailyKwh, load, region);
+        const loadDay = this.buildLoadDay(mo.dailyKwh, load, region, mo.shape);
         const pvDay = sel.pv ? this.buildPvDay(cfg.pv.capacityKw, region, pvFactor, mo.monthFactor, pvYieldEff)
                              : new Array(24).fill(0);
         const demandCap = demandMgmt ? (peakKw * 0.75) : null;
@@ -436,7 +478,8 @@ const Engine = {
         withBasis: withBasic.basis,
         baselineBasicFee: baselineBasic.fee,
         withBasicFee: withBasic.fee,
-        demandCut: storageDemandCut
+        demandCut: storageDemandCut,
+        truePeakKw, loadDurationCurve
       },
       detail: { charger: chg, diesel: dsl, loadDay: repLoadDay, peakKw }
     };

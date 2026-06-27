@@ -50,7 +50,7 @@ const LoadParser = {
       val *= unitScale;
       const tsStr = r.filter((_, i) => i !== valueCol).join(' ');
       const dt = this._parseDT(tsStr);
-      recs.push({ val, h: dt.h, mi: dt.mi, mo: dt.mo, hasDate: dt.hasDate });
+      recs.push({ val, h: dt.h, mi: dt.mi, mo: dt.mo, dow: dt.dow, hasDate: dt.hasDate });
     }
     if (!recs.length) return { ok: false, error: '未解析到有效的数值数据行。' };
 
@@ -64,6 +64,10 @@ const LoadParser = {
     const monthHas = new Array(12).fill(false);
     const hourSum = new Array(24).fill(0);
     const hourCnt = new Array(24).fill(0);
+    // 分月×小时形状 + 工作日/周末形状（8760 逐时仿真用）
+    const mk24 = () => new Array(24).fill(0);
+    const mhSum = Array.from({ length: 12 }, mk24), mhCnt = Array.from({ length: 12 }, mk24);
+    const wdSum = mk24(), wdCnt = mk24(), weSum = mk24(), weCnt = mk24();
     let sumE = 0, peakP = 0;
 
     for (const r of recs) {
@@ -73,7 +77,14 @@ const LoadParser = {
       if (power > peakP) peakP = power;
       const h = (r.h != null) ? r.h : 0;
       hourSum[h] += power; hourCnt[h]++;
-      if (r.hasDate && r.mo != null) { monthE[r.mo] += energy; monthHas[r.mo] = true; }
+      if (r.hasDate && r.mo != null) {
+        monthE[r.mo] += energy; monthHas[r.mo] = true;
+        mhSum[r.mo][h] += power; mhCnt[r.mo][h]++;
+      }
+      if (r.dow != null) {
+        if (r.dow === 0 || r.dow === 6) { weSum[h] += power; weCnt[h]++; }
+        else { wdSum[h] += power; wdCnt[h]++; }
+      }
     }
 
     let monthly, annualKwh, spanNote;
@@ -93,6 +104,11 @@ const LoadParser = {
     }
 
     const hourly = hourSum.map((s, i) => (hourCnt[i] ? s / hourCnt[i] : 0));
+    // 各月 24h 平均形状（无数据月为 null）；工作日/周末形状
+    const monthlyHourly = mhSum.map((row, m) =>
+      row.some((_, h) => mhCnt[m][h]) ? row.map((s, h) => (mhCnt[m][h] ? s / mhCnt[m][h] : 0)) : null);
+    const weekdayShape = wdCnt.some(c => c) ? wdSum.map((s, h) => (wdCnt[h] ? s / wdCnt[h] : 0)) : null;
+    const weekendShape = weCnt.some(c => c) ? weSum.map((s, h) => (weCnt[h] ? s / weCnt[h] : 0)) : null;
 
     const unitNote = unitScale === 1000 ? '（兆瓦时 MWh 已×1000 换算）'
                    : unitScale === 10000 ? '（万度 已×10000 换算）' : '';
@@ -102,7 +118,7 @@ const LoadParser = {
       count: recs.length,
       annualKwh, monthly,
       peakKw: Math.round(peakP),
-      hourly,
+      hourly, monthlyHourly, weekdayShape, weekendShape,
       note: `识别成功：${interval} 分钟间隔，共 ${recs.length} 条；数值判定为${kind === 'power' ? '有功功率 (kW)' : '每区间电量 (kWh)'}${unitNote}；${spanNote}。` +
             `年用电约 ${(annualKwh / 1e4).toFixed(1)} 万 kWh，最大需量约 ${Math.round(peakP)} kW。`
     };
@@ -182,26 +198,29 @@ const LoadParser = {
   },
 
   _parseDT(s) {
-    const out = { hasDate: false, mo: null, h: null, mi: null };
+    const out = { hasDate: false, y: null, mo: null, d: null, dow: null, h: null, mi: null };
     const dm = s.match(/(\d{4})[-/.](\d{1,2})[-/.](\d{1,2})/);
     const tm = s.match(/(\d{1,2}):(\d{2})/);
-    if (dm) { out.hasDate = true; out.mo = Math.min(11, Math.max(0, parseInt(dm[2], 10) - 1)); }
+    if (dm) { out.hasDate = true; out.y = +dm[1]; out.mo = Math.min(11, Math.max(0, parseInt(dm[2], 10) - 1)); out.d = +dm[3]; }
     else {
       // 紧凑日期 YYYYMMDD（如南网 20250401）
       const cm = s.match(/(?:^|\D)(20\d{2})(0[1-9]|1[0-2])(0[1-9]|[12]\d|3[01])(?:\D|$)/);
-      if (cm) { out.hasDate = true; out.mo = parseInt(cm[2], 10) - 1; }
+      if (cm) { out.hasDate = true; out.y = +cm[1]; out.mo = parseInt(cm[2], 10) - 1; out.d = +cm[3]; }
     }
     if (tm) { out.h = Math.min(23, parseInt(tm[1], 10)); out.mi = parseInt(tm[2], 10); }
     // Excel 序列日期（数值，如 45292.5104）：约 1954–2119 年区间
     if (!dm && !out.hasDate && !tm) {
       const num = parseFloat(String(s).trim());
       if (isFinite(num) && num > 20000 && num < 80000) {
-        const d = new Date(Date.UTC(1899, 11, 30) + Math.round(num * 86400) * 1000);
+        const dt = new Date(Date.UTC(1899, 11, 30) + Math.round(num * 86400) * 1000);
         out.hasDate = true;
-        out.mo = d.getUTCMonth();
-        out.h = d.getUTCHours();
-        out.mi = d.getUTCMinutes();
+        out.y = dt.getUTCFullYear(); out.mo = dt.getUTCMonth(); out.d = dt.getUTCDate();
+        out.h = dt.getUTCHours(); out.mi = dt.getUTCMinutes();
       }
+    }
+    // 星期（0=周日…6=周六），用于工作日/周末区分
+    if (out.y && out.mo != null && out.d) {
+      out.dow = new Date(Date.UTC(out.y, out.mo, out.d)).getUTCDay();
     }
     return out;
   },

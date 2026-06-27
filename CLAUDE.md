@@ -49,9 +49,12 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
   cashflow/balance statements, **project & equity IRR**, dual-ic NPV, DSCR/ICR,
   LCOE, single-factor sensitivity. Depends on Finance.
 - `js/engine.js` — `Engine`: device modeling + hourly storage dispatch
-  (`dispatchDay`) + `run(cfg)`. Dual precision via `mode`:
-  `simplified` (1 representative day ×365) vs `professional` (12 months ×
-  monthly irradiance). `cfg.load` carries `monthly[12]` (kWh per month),
+  (`dispatchDay`) + `run(cfg)`. Triple precision via `mode`:
+  `simplified` (1 representative day ×365), `professional` (12 months ×
+  monthly irradiance), `engineering` (**8760 逐时**: 365 days × per-month real
+  hourly shape from `load.monthlyHourly` + weekday/weekend; returns
+  `load.truePeakKw` & `load.loadDurationCurve`). `buildLoadDay` accepts a
+  `shapeOverride`. `cfg.load` carries `monthly[12]` (kWh per month),
   `dataTier` (`template`/`tou`/`hourly` — see `buildLoadDay`), `transformerKVA`,
   `peakKw`, `basicFeeMode` (`auto`/`demand`/`capacity`). `basicFee()` computes
   two-part basic charge; storage demand-shaving only reduces it under demand

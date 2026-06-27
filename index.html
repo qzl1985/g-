@@ -40,7 +40,8 @@
         <span>精度</span>
         <select id="modeSelect">
           <option value="simplified">简化快速版</option>
-          <option value="professional">专业逐时版(8760h)</option>
+          <option value="professional">专业版(12月)</option>
+          <option value="engineering">工程精算版(8760逐时)</option>
         </select>
       </label>
     </div>
@@ -315,6 +316,10 @@
             <canvas id="capexChart" height="220"></canvas>
             <div id="capexLegend" class="legend"></div>
           </div>
+        </div>
+        <div class="card hidden" id="ldcCard">
+          <h3>负荷持续曲线 LDC <small id="ldcNote">（8760 逐时仿真）</small></h3>
+          <canvas id="ldcChart" height="200"></canvas>
         </div>
         <div class="card">
           <h3>逐年现金流明细</h3>
