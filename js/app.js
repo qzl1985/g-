@@ -501,15 +501,54 @@ const App = {
 
   _reportHTML(r, cfg, cashImg, capexImg) {
     const f = r.finance, cur = r.region.currency;
+    const money = v => this.money(v, cur);
     const dev = this._deviceLines(cfg, r).map(l =>
-      `<tr><td>${l[0]}</td><td>${l[1]}</td><td class="num">${this.money(l[2], cur)}</td></tr>`).join('');
+      `<tr><td>${l[0]}</td><td>${l[1]}</td><td class="num">${money(l[2])}</td></tr>`).join('');
     const kpi = this._kpiPairs(r).map(p =>
       `<div class="kbox"><div class="kl">${p[0]}</div><div class="kv">${p[1]}</div></div>`).join('');
     const cash = f.cashflows.map((cf, t) =>
       `<tr><td>${t === 0 ? '初始投资' : '第 ' + t + ' 年'}</td>
-       <td class="num ${cf >= 0 ? 'pos' : 'neg'}">${this.money(cf, cur)}</td>
-       <td class="num ${f.cumulative[t] >= 0 ? 'pos' : 'neg'}">${this.money(f.cumulative[t], cur)}</td></tr>`).join('');
-    const mode = r.mode === 'professional' ? '专业逐时版 (8760h)' : '简化快速版';
+       <td class="num ${cf >= 0 ? 'pos' : 'neg'}">${money(cf)}</td>
+       <td class="num ${f.cumulative[t] >= 0 ? 'pos' : 'neg'}">${money(f.cumulative[t])}</td></tr>`).join('');
+    const mode = { simplified: '简化快速版', professional: '专业版(12月)', engineering: '工程精算版(8760逐时)' }[r.mode] || r.mode;
+    const annual = (r.load && r.load.annualKwh) || cfg.load.annualKwh || 0;
+    const peak = (r.load && r.load.peakKw) || cfg.load.peakKw || 0;
+    const f2 = this.state.lastF2, pv = this.state.lastPvGen;
+
+    // 投资估算（分项）+ 设备清单 BOM
+    let estSec = '', bomSec = '';
+    if (typeof BOM !== 'undefined') {
+      const est = BOM.estimate(cfg, r, { idc: f2 ? f2.idc : 0 });
+      estSec = `<h2>三、投资估算（分项）</h2><table><tbody>` +
+        est.rows.map(x => `<tr><td>${x.name}${x.note ? ' <small style="color:#8a92a6">(' + x.note + ')</small>' : ''}</td><td class="num"${x.bold ? ' style="font-weight:700;color:#1d4ed8"' : ''}>${money(x.amount)}</td></tr>`).join('') +
+        `</tbody></table>`;
+      const items = BOM.deviceList(cfg);
+      if (items.length) bomSec = `<h2>四、主要设备清单（BOM）</h2><table><thead><tr><th>设备/材料</th><th>规格</th><th class="num">数量</th><th class="num">单价</th><th class="num">合价</th></tr></thead><tbody>` +
+        items.map(i => `<tr><td>${i.name}</td><td>${i.spec}</td><td class="num">${i.qty} ${i.unit}</td><td class="num">${money(i.unitPrice)}</td><td class="num">${money(i.amount)}</td></tr>`).join('') + `</tbody></table>`;
+    }
+
+    // 发电量（P50/P90）
+    let genSec = '';
+    if (pv) {
+      const g = [['P50 年发电', (pv.p50 / 1e4).toFixed(1) + ' 万kWh'], ['P90 年发电', (pv.p90 / 1e4).toFixed(1) + ' 万kWh'],
+        ['系统效率 PR', (pv.pr * 100).toFixed(1) + '%'], ['等效利用小时', pv.hours + ' h'], ['阵列倾角', pv.detail.tilt + '°']];
+      genSec = `<h2>二、发电量精算（GB50797 · P50/P90）</h2><div class="kgrid">` +
+        g.map(x => `<div class="kbox"><div class="kl">${x[0]}</div><div class="kv">${x[1]}</div></div>`).join('') + `</div>`;
+    }
+
+    // 可研财务指标（含融资/三表/DSCR）
+    let engSec = '';
+    if (f2) {
+      const I = f2.indicators;
+      const ek = [['总投资(动态)', money(f2.totalInvestment)], ['资本金', money(f2.equity)],
+        ['项目 IRR', I.projectIRR !== null ? (I.projectIRR * 100).toFixed(2) + '%' : '—'],
+        ['资本金 IRR', I.equityIRR !== null ? (I.equityIRR * 100).toFixed(2) + '%' : '—'],
+        ['NPV@8%', money(I.npv['0.08'])], ['NPV@6%', money(I.npv['0.06'])],
+        ['最小 DSCR', I.dscr.min != null ? I.dscr.min.toFixed(2) : '—'], ['LCOE', I.lcoe ? I.lcoe.toFixed(3) + ' ' + cur + '/kWh' : '—']];
+      engSec = `<h2>六、可研级财务评价（融资·税务·三大报表口径）</h2><div class="kgrid">` +
+        ek.map(x => `<div class="kbox"><div class="kl">${x[0]}</div><div class="kv">${x[1]}</div></div>`).join('') + `</div>`;
+    }
+
     return `<!DOCTYPE html><html lang="zh-CN"><head><meta charset="UTF-8"/>
 <title>新能源投资测算报告</title>
 <style>
@@ -535,30 +574,40 @@ const App = {
   .disc { margin-top:24px; font-size:11px; color:#8a92a6; border-top:1px solid #e2e6ee; padding-top:10px; }
   @media print { body { margin:14mm; } h2 { page-break-after:avoid; } tr { page-break-inside:avoid; } }
 </style></head><body>
-  <h1>⚡ 新能源投资测算报告</h1>
+  <h1>⚡ 新能源投资项目可行性研究测算报告</h1>
   <div class="meta">生成时间：<b>${new Date().toLocaleString('zh-CN')}</b></div>
   <div class="meta">地区：<b>${r.region.name}</b> ｜ 测算精度：<b>${mode}</b> ｜ 测算年限：<b>${r.years} 年</b></div>
-  <div class="meta">年用电量：<b>${Math.round(cfg.load.annualKwh).toLocaleString()} kWh</b> ｜ 峰值负荷：<b>${Math.round(cfg.load.peakKw).toLocaleString()} kW</b></div>
+  <div class="meta">年用电量：<b>${Math.round(annual).toLocaleString()} kWh</b> ｜ ${r.load && r.load.truePeakKw ? '真实峰值' : '峰值负荷'}：<b>${Math.round(r.load && r.load.truePeakKw ? r.load.truePeakKw : peak).toLocaleString()} kW</b>${cfg.load.transformerKVA ? ' ｜ 变压器：<b>' + Math.round(cfg.load.transformerKVA) + ' kVA</b>' : ''}</div>
 
-  <h2>一、设备配置</h2>
+  <h2>一、系统方案（设备配置）</h2>
   <table><thead><tr><th>设备</th><th>规格</th><th class="num">投资</th></tr></thead>
-  <tbody>${dev}<tr><td><b>合计</b></td><td></td><td class="num"><b>${this.money(r.capex, cur)}</b></td></tr></tbody></table>
+  <tbody>${dev}<tr><td><b>合计</b></td><td></td><td class="num"><b>${money(r.capex)}</b></td></tr></tbody></table>
 
-  <h2>二、关键财务指标</h2>
+  ${genSec}
+  ${estSec}
+  ${bomSec}
+
+  <h2>五、关键财务指标</h2>
   <div class="kgrid">${kpi}</div>
 
-  <h2>三、图表</h2>
+  ${engSec}
+
+  <h2>七、图表</h2>
   <div class="charts">
     ${cashImg ? `<figure><img src="${cashImg}"/><figcaption>累计现金流</figcaption></figure>` : ''}
     ${capexImg ? `<figure><img src="${capexImg}"/><figcaption>投资构成</figcaption></figure>` : ''}
   </div>
 
-  <h2>四、逐年现金流</h2>
+  <h2>八、逐年现金流</h2>
   <table><thead><tr><th>年度</th><th class="num">当年现金流</th><th class="num">累计现金流</th></tr></thead>
   <tbody>${cash}</tbody></table>
 
-  <div class="disc">本报告基于工程估算与公开市场参数自动生成，仅供投资决策初筛参考；
-  实际收益受当地电价政策、设备选型、施工与运营等因素影响，请以最终工程方案为准。</div>
+  <h2>九、结论</h2>
+  <div class="meta">本项目${f.npv > 0 ? '净现值为正、经济可行' : '当前参数下净现值为负，建议优化配置或核对电价/造价'}；
+  ${f.irr !== null ? '内部收益率约 ' + (f.irr * 100).toFixed(1) + '%，' : ''}静态回收期约 ${isFinite(f.paybackStatic) ? f.paybackStatic.toFixed(1) + ' 年' : '—'}。建议结合实际电价政策、设备选型与并网条件进一步优化。</div>
+
+  <div class="disc">本报告基于工程估算与公开市场参数自动生成，仅供投资决策初筛/预可研参考；
+  实际收益受当地电价政策、设备选型、施工与运营等因素影响，请以最终工程设计方案为准。</div>
 </body></html>`;
   },
 
@@ -1063,9 +1112,11 @@ const App = {
       if (this.engineeringOn()) {
         const f2 = this.runFinance2(cfg, result);
         this.renderEngineering(f2, pvGen, result);
+        this.state.lastF2 = f2; this.state.lastPvGen = pvGen;   // 供可研报告导出
         engBox.classList.remove('hidden');
       } else {
         engBox.classList.add('hidden');
+        this.state.lastF2 = null; this.state.lastPvGen = null;
       }
       document.getElementById('results').scrollIntoView({ behavior: 'smooth', block: 'start' });
     } catch (e) {

@@ -93,9 +93,13 @@ Layered, DOM-decoupled. Scripts load in dependency order (see bottom of
 - `js/assistant.js` — `Assistant`: Chinese NL parse (`parse`) + end-to-end
   `recommend`. Depends on global `App.buildConfig`. `callLLM` is an optional
   hook for swapping in a real LLM.
+- `js/bom.js` — `BOM`: investment estimate by category (设备购置/建安/其他/
+  预备费/建设期利息) + main equipment list (组件/逆变器/电池/PCS/变压器…), from
+  cfg + result.capexBreakdown + DEVICE_DB. Fed into the PDF 可研 report.
 - `js/app.js` — `App`: UI orchestration, form state, Canvas charts (no chart
   lib). `App.buildConfig(overrides)` is the single config assembler shared by
-  calc / optimize / assistant.
+  calc / optimize / assistant. `_reportHTML` builds a 可研-grade PDF report
+  (方案/发电P50P90/投资估算/设备清单/财务/可研指标/现金流/结论).
 
 ## Conventions
 
